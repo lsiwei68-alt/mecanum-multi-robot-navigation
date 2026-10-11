@@ -125,9 +125,15 @@ ros2 launch mecanum_multi_nav dual_rviz.launch.py
 的位置。它先向两套 Nav2 请求独立全局路径并让两车同时出发，然后以 5 Hz 读取
 实际位姿和行驶速度，滚动重算两条剩余路径的预计到达时间。只有当空间距离小于
 安全间距且到达时间窗口重叠时，才动态建立通行预约：根据任务优先级和预计到达
-时间选择通行车辆，并沿让行车辆的路径自动生成冲突区之前的等待点。通行车根据
-实测进度越过最后一个冲突点并留出安全距离后，预约才会释放，让行车恢复原终点
-任务。调度过程中没有写死狭窄通道的位置，也没有预先指定哪辆车等待。
+时间选择通行车辆，并沿让行车辆的路径自动生成冲突区之前的等待点。预约期间，
+调度器每个周期都会模拟“此刻恢复让行车”的两条未来轨迹；预测连续 5 个周期无
+冲突且实际车距满足下限后立即释放，让行车恢复原终点任务，不再等待先行车越过
+启动时固定的路径索引。调度过程中没有写死狭窄通道的位置，也没有预先指定哪辆
+车等待。
+
+调度器同时订阅 `/robot1/plan` 和 `/robot2/plan`。Nav2 在执行中更新全局路径时，
+后续冲突检测会改用最新路径；让行车前往等待点时产生的临时路径不会覆盖其原始
+终点路径。
 
 RViz 中蓝色和橙色线分别是两条预测轨迹，红色点是自动检测出的时空冲突区，黄色
 圆盘是自动计算的让行点；冲突释放后红色点变绿。当前两车优先级相同，预计更早
@@ -144,7 +150,8 @@ ros2 launch mecanum_multi_nav narrow_passage_demo.launch.py
 
 ```bash
 ros2 launch mecanum_multi_nav narrow_passage_demo.launch.py \
-  robot2_priority:=10 clearance:=0.8 time_margin:=4.0
+  robot2_priority:=10 clearance:=0.8 time_margin:=4.0 \
+  release_min_separation:=1.0 release_confirmation_cycles:=5
 ```
 
 只显示 RViz、不打开 Gazebo GUI：
@@ -159,7 +166,8 @@ ros2 launch mecanum_multi_nav narrow_passage_demo.launch.py headless:=true
 ros2 topic echo --qos-durability transient_local /coordination/state
 ```
 
-当前实现完成了滚动重预测、动态等待和按实测进度释放预约。它仍属于中央在线
+当前实现完成了最新全局路径跟踪、滚动重预测、动态等待和“现在放行”反事实预测。
+它仍属于中央在线
 调度器，并不是联合搜索两辆车全部状态的最优多智能体路径规划器。后续可继续加入
 优先级老化（避免长期饥饿）、全局路径变化检测、对向会车的候选避让点搜索，以及
 三辆以上车辆的预约队列。

@@ -60,6 +60,8 @@ class RobotRuntime:
     last_x: float = None
     last_y: float = None
     last_stamp: float = None
+    plan_subscription: object = None
+    plan_revision: int = 0
 
 
 def make_pose(navigator, x, y, yaw=0.0):
@@ -87,9 +89,12 @@ def timed_samples(path, nominal_speed):
     return samples
 
 
-def remaining_timed_samples(robot, minimum_speed, maximum_speed):
+def remaining_timed_samples(robot, minimum_speed, maximum_speed,
+                            speed_override=None):
     """Retimestamp the untraversed path from the robot's measured state."""
-    speed = min(max(robot.speed, minimum_speed), maximum_speed)
+    prediction_speed = (robot.speed if speed_override is None
+                        else speed_override)
+    speed = min(max(prediction_speed, minimum_speed), maximum_speed)
     elapsed = 0.0
     previous_x = robot.x
     previous_y = robot.y
@@ -102,6 +107,35 @@ def remaining_timed_samples(robot, minimum_speed, maximum_speed):
         previous_x = sample.x
         previous_y = sample.y
     return remaining
+
+
+def update_live_path(robot, path, nominal_speed):
+    """Track Nav2 replans for final-goal navigation, ignoring hold paths."""
+    if robot.mode != 'goal' or not path.poses:
+        return
+    endpoint = path.poses[-1].pose.position
+    goal = robot.goal.pose.position
+    if math.hypot(endpoint.x - goal.x, endpoint.y - goal.y) > 0.35:
+        return
+    robot.path = deepcopy(path)
+    robot.samples = timed_samples(robot.path, nominal_speed)
+    robot.progress = nearest_progress(
+        robot.samples, robot.x, robot.y, 0)
+    robot.plan_revision += 1
+    if robot.plan_revision == 1:
+        robot.navigator.get_logger().info(
+            f'[SCHEDULER] LIVE_PLAN_TRACKING: {robot.name} 已接入 Nav2 实时全局路径')
+
+
+def subscribe_to_live_plans(robots, nominal_speed):
+    """Subscribe to each namespaced Nav2 planner's latest global path."""
+    for robot in robots.values():
+        robot.plan_subscription = robot.navigator.create_subscription(
+            Path,
+            'plan',
+            lambda path, current=robot: update_live_path(
+                current, path, nominal_speed),
+            10)
 
 
 def stamp_remaining_path(path, samples, node):
@@ -117,10 +151,23 @@ def stamp_remaining_path(path, samples, node):
 
 
 def find_conflicts(samples1, samples2, clearance, time_margin):
+    """Find conflicts with a sliding temporal window over sorted samples."""
     conflicts = []
+    window_start = 0
     for sample1 in samples1:
-        for sample2 in samples2:
+        # The epsilon only broadens the candidate window.  The exact check
+        # below preserves the original boundary behavior for floating point
+        # timestamps.
+        earliest = sample1.time - time_margin - 1e-9
+        latest = sample1.time + time_margin + 1e-9
+        while (window_start < len(samples2) and
+               samples2[window_start].time < earliest):
+            window_start += 1
+        index2 = window_start
+        while index2 < len(samples2) and samples2[index2].time <= latest:
+            sample2 = samples2[index2]
             if abs(sample1.time - sample2.time) > time_margin:
+                index2 += 1
                 continue
             distance = math.hypot(sample1.x - sample2.x, sample1.y - sample2.y)
             if distance <= clearance:
@@ -129,29 +176,45 @@ def find_conflicts(samples1, samples2, clearance, time_margin):
                     (sample1.x + sample2.x) / 2.0,
                     (sample1.y + sample2.y) / 2.0,
                     sample1.time, sample2.time))
+            index2 += 1
     return conflicts
 
 
+def thin_timed_samples(samples, minimum_distance=0.12,
+                       maximum_time_gap=0.50):
+    """Reduce dense planner paths while preserving spatial and temporal shape."""
+    if len(samples) <= 2:
+        return samples
+    reduced = [samples[0]]
+    for sample in samples[1:-1]:
+        previous = reduced[-1]
+        distance = math.hypot(
+            sample.x - previous.x, sample.y - previous.y)
+        if (distance >= minimum_distance or
+                sample.time - previous.time >= maximum_time_gap):
+            reduced.append(sample)
+    reduced.append(samples[-1])
+    return reduced
+
+
+def detect_conflicts(samples1, samples2, clearance, time_margin):
+    """Run conflict detection on bounded-resolution trajectory samples."""
+    return find_conflicts(
+        thin_timed_samples(samples1), thin_timed_samples(samples2),
+        clearance, time_margin)
+
+
 def index_before_distance(samples, conflict_index, distance):
-    target = samples[conflict_index]
-    index = conflict_index
+    index = min(
+        range(len(samples)),
+        key=lambda position: abs(samples[position].index - conflict_index))
+    target = samples[index]
     while index > 0:
         candidate = samples[index]
         if math.hypot(candidate.x - target.x, candidate.y - target.y) >= distance:
-            return index
+            return candidate.index
         index -= 1
-    return 0
-
-
-def index_after_distance(samples, conflict_index, distance):
-    target = samples[conflict_index]
-    index = conflict_index
-    while index < len(samples) - 1:
-        candidate = samples[index]
-        if math.hypot(candidate.x - target.x, candidate.y - target.y) >= distance:
-            return index
-        index += 1
-    return len(samples) - 1
+    return samples[0].index
 
 
 def nearest_progress(samples, x, y, previous_index):
@@ -320,6 +383,7 @@ class SchedulerView:
             'ONLINE_MONITORING': 'Monitoring both robots',
             'ONLINE_CONFLICT_DETECTED': 'Conflict detected',
             'ONLINE_YIELDING': 'Reservation active - one robot yielding',
+            'ONLINE_RELEASE_PENDING': 'Release safety confirmation',
             'ONLINE_RESERVATION_RELEASED': 'Reservation released',
             'ONLINE_CLEAR': 'Conflict cleared - monitoring',
             'COMPLETE': 'Both robots arrived',
@@ -397,8 +461,8 @@ def update_runtime(robot, minimum_speed, maximum_speed):
 
 
 def command_goal(robot):
-    start_navigation(robot.navigator, robot.goal)
     robot.mode = 'goal'
+    start_navigation(robot.navigator, robot.goal)
     robot.active = True
 
 
@@ -419,8 +483,8 @@ def cancel_active_navigation(robot, timeout=5.0):
 
 def command_hold(robot, hold_pose):
     cancel_active_navigation(robot)
-    start_navigation(robot.navigator, hold_pose)
     robot.mode = 'hold'
+    start_navigation(robot.navigator, hold_pose)
     robot.active = True
 
 
@@ -443,6 +507,39 @@ def online_predictions(robots, node, minimum_speed, maximum_speed):
     return timed, predicted
 
 
+def extend_finished_robot_occupancy(robots, timed, time_margin):
+    """Model a robot parked at its goal for the other robot's horizon."""
+    for name, robot in robots.items():
+        if not robot.final_done:
+            continue
+        other_name = 'robot2' if name == 'robot1' else 'robot1'
+        other_horizon = timed[other_name][-1].time if timed[other_name] else 0.0
+        horizon = other_horizon + time_margin
+        sample_index = robot.progress
+        timed[name] = [TimedSample(
+            sample_index, robot.x, robot.y, step * 0.5)
+            for step in range(int(horizon / 0.5) + 1)]
+
+
+def release_now_predictions(robots, yielding, node, parameters):
+    """Predict both trajectories under the counterfactual: release now."""
+    minimum_speed = float(parameters['minimum_prediction_speed'])
+    maximum_speed = float(parameters['maximum_prediction_speed'])
+    nominal_speed = float(parameters['nominal_speed'])
+    timed = {}
+    for name, robot in robots.items():
+        speed_override = nominal_speed if name == yielding else None
+        timed[name] = remaining_timed_samples(
+            robot, minimum_speed, maximum_speed, speed_override)
+    extend_finished_robot_occupancy(
+        robots, timed, float(parameters['time_margin']))
+    predicted = {
+        name: stamp_remaining_path(robot.path, timed[name], node)
+        for name, robot in robots.items()
+    }
+    return timed, predicted
+
+
 def run_online_coordination(robots, view, parameters):
     """Continuously reschedule two independently planned Nav2 trajectories."""
     names = ('robot1', 'robot2')
@@ -454,6 +551,11 @@ def run_online_coordination(robots, view, parameters):
     clearance = float(parameters['clearance'])
     time_margin = float(parameters['time_margin'])
     emergency_clearance = float(parameters['emergency_clearance'])
+    release_min_separation = max(
+        emergency_clearance,
+        float(parameters['release_min_separation']))
+    release_confirmation_cycles = max(
+        1, int(parameters['release_confirmation_cycles']))
     period = float(parameters['online_period'])
     timeout = float(parameters['timeout'])
 
@@ -476,7 +578,7 @@ def run_online_coordination(robots, view, parameters):
             robots, view.node, minimum_speed, maximum_speed)
         conflicts = []
         if timed['robot1'] and timed['robot2']:
-            conflicts = find_conflicts(
+            conflicts = detect_conflicts(
                 timed['robot1'], timed['robot2'], clearance, time_margin)
 
         separation = math.hypot(
@@ -484,7 +586,8 @@ def run_online_coordination(robots, view, parameters):
             robots['robot1'].y - robots['robot2'].y)
         if not conflicts and separation <= emergency_clearance:
             conflicts = [Conflict(
-                robots['robot1'].progress, robots['robot2'].progress,
+                robots['robot1'].samples[robots['robot1'].progress].index,
+                robots['robot2'].samples[robots['robot2'].progress].index,
                 (robots['robot1'].x + robots['robot2'].x) / 2.0,
                 (robots['robot1'].y + robots['robot2'].y) / 2.0,
                 0.0, 0.0)]
@@ -499,10 +602,6 @@ def run_online_coordination(robots, view, parameters):
                 robots[yielding].samples,
                 min(conflict_indices[yielding]),
                 float(parameters['hold_distance']))
-            release_index = index_after_distance(
-                robots[granted].samples,
-                max(conflict_indices[granted]),
-                float(parameters['release_distance']))
             hold_pose = deepcopy(robots[yielding].path.poses[hold_index])
             hold_ahead = hold_index > robots[yielding].progress + 2
             if hold_ahead:
@@ -517,9 +616,10 @@ def run_online_coordination(robots, view, parameters):
             reservation = {
                 'granted': granted,
                 'yielding': yielding,
-                'release_index': release_index,
                 'conflicts': conflicts,
+                'last_conflicts': conflicts,
                 'hold_pose': hold_pose,
+                'clear_cycles': 0,
             }
             view.set_plan(
                 predicted['robot1'], predicted['robot2'],
@@ -534,14 +634,26 @@ def run_online_coordination(robots, view, parameters):
         if reservation is not None:
             granted = reservation['granted']
             yielding = reservation['yielding']
-            granted_robot = robots[granted]
+            release_timed, release_predicted = release_now_predictions(
+                robots, yielding, view.node, parameters)
+            release_conflicts = detect_conflicts(
+                release_timed['robot1'], release_timed['robot2'],
+                clearance, time_margin)
+            if release_conflicts:
+                reservation['last_conflicts'] = release_conflicts
+            prediction_clear = not release_conflicts
+            physically_clear = separation >= release_min_separation
+            if prediction_clear and physically_clear:
+                reservation['clear_cycles'] += 1
+            else:
+                reservation['clear_cycles'] = 0
             cleared = (
-                granted_robot.progress >= reservation['release_index'] or
-                granted_robot.final_done)
+                reservation['clear_cycles'] >= release_confirmation_cycles)
             if cleared:
                 if not robots[yielding].final_done:
                     cancel_active_navigation(robots[yielding])
                     command_goal(robots[yielding])
+                reservation['conflicts'] = reservation['last_conflicts']
                 last_released = reservation
                 release_visible_until = time.monotonic() + 3.0
                 reservation = None
@@ -549,13 +661,32 @@ def run_online_coordination(robots, view, parameters):
                     'ONLINE_RESERVATION_RELEASED',
                     f'{granted} 已清空动态冲突区；放行 {yielding}',
                     released=True)
-            else:
+            elif prediction_clear:
                 view.set_plan(
-                    predicted['robot1'], predicted['robot2'],
-                    reservation['conflicts'], reservation['hold_pose'])
+                    release_predicted['robot1'],
+                    release_predicted['robot2'], [],
+                    reservation['hold_pose'])
+                if physically_clear:
+                    release_detail = (
+                        f'放行预测已安全；确认 '
+                        f'{reservation["clear_cycles"]}/'
+                        f'{release_confirmation_cycles}')
+                else:
+                    release_detail = (
+                        f'预测无冲突；等待实际车距 '
+                        f'{separation:.2f}/{release_min_separation:.2f} m')
+                view.publish(
+                    'ONLINE_RELEASE_PENDING',
+                    release_detail)
+            else:
+                reservation['conflicts'] = release_conflicts
+                view.set_plan(
+                    release_predicted['robot1'],
+                    release_predicted['robot2'],
+                    release_conflicts, reservation['hold_pose'])
                 view.publish(
                     'ONLINE_YIELDING',
-                    f'{yielding} 让行；{granted} 正在穿越预约区')
+                    f'{yielding} 让行；实时模拟当前放行仍有冲突')
         elif not conflicts:
             if (last_released is not None and
                     time.monotonic() < release_visible_until):
@@ -591,11 +722,12 @@ def main(args=None):
         # reproducible despite controller and simulator timing jitter.
         'time_margin': 4.00,
         'hold_distance': 1.10,
-        'release_distance': 0.90,
         'online_period': 0.20,
         'minimum_prediction_speed': 0.12,
         'maximum_prediction_speed': 0.55,
         'emergency_clearance': 0.65,
+        'release_min_separation': 1.00,
+        'release_confirmation_cycles': 5,
         'robot1_priority': 0,
         'robot2_priority': 0,
         'timeout': 240.0,
@@ -651,6 +783,8 @@ def main(args=None):
                 speed=float(parameters['nominal_speed']))
             for name in ('robot1', 'robot2')
         }
+        subscribe_to_live_plans(
+            robots, float(parameters['nominal_speed']))
         view.publish(
             'ONLINE_MONITORING', '启动双车并持续重算剩余轨迹冲突')
         results = run_online_coordination(robots, view, parameters)

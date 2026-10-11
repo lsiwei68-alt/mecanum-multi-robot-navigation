@@ -22,6 +22,9 @@ def generate_launch_description():
     run_demo = LaunchConfiguration('run_demo')
     clearance = LaunchConfiguration('clearance')
     time_margin = LaunchConfiguration('time_margin')
+    release_min_separation = LaunchConfiguration('release_min_separation')
+    release_confirmation_cycles = LaunchConfiguration(
+        'release_confirmation_cycles')
     robot1_priority = LaunchConfiguration('robot1_priority')
     robot2_priority = LaunchConfiguration('robot2_priority')
 
@@ -31,6 +34,9 @@ def generate_launch_description():
         DeclareLaunchArgument('run_demo', default_value='true'),
         DeclareLaunchArgument('clearance', default_value='0.80'),
         DeclareLaunchArgument('time_margin', default_value='4.0'),
+        DeclareLaunchArgument('release_min_separation', default_value='1.0'),
+        DeclareLaunchArgument(
+            'release_confirmation_cycles', default_value='5'),
         DeclareLaunchArgument('robot1_priority', default_value='0'),
         DeclareLaunchArgument('robot2_priority', default_value='0'),
         IncludeLaunchDescription(
@@ -65,6 +71,10 @@ def generate_launch_description():
                     'clearance': ParameterValue(clearance, value_type=float),
                     'time_margin': ParameterValue(
                         time_margin, value_type=float),
+                    'release_min_separation': ParameterValue(
+                        release_min_separation, value_type=float),
+                    'release_confirmation_cycles': ParameterValue(
+                        release_confirmation_cycles, value_type=int),
                     'robot1_priority': ParameterValue(
                         robot1_priority, value_type=int),
                     'robot2_priority': ParameterValue(
