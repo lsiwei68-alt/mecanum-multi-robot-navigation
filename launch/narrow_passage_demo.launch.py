@@ -46,8 +46,8 @@ def generate_launch_description():
         TimerAction(period=13.0, actions=[
             Node(
                 package='mecanum_multi_nav',
-                executable='narrow_passage_coordinator',
-                name='narrow_passage_coordinator',
+                executable='trajectory_coordinator',
+                name='trajectory_coordinator',
                 parameters=[{'use_sim_time': True}], output='screen',
                 condition=IfCondition(run_demo),
             ),

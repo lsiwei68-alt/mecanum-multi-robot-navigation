@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+"""Generic path-driven two-robot spatiotemporal coordinator.
+
+The narrow passage is only a test scene. This node does not know its location:
+it plans both routes, predicts arrival time, detects overlapping space-time
+occupancy, and delays the lower-priority robot at a safe path point.
+"""
+
+from copy import deepcopy
+from dataclasses import dataclass
+import math
+import sys
+import time
+
+from geometry_msgs.msg import Point, PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from nav_msgs.msg import Path
+import rclpy
+from rclpy.duration import Duration
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
+
+
+@dataclass
+class TimedSample:
+    index: int
+    x: float
+    y: float
+    time: float
+
+
+@dataclass
+class Conflict:
+    index1: int
+    index2: int
+    x: float
+    y: float
+    time1: float
+    time2: float
+
+
+def make_pose(navigator, x, y, yaw=0.0):
+    pose = PoseStamped()
+    pose.header.frame_id = 'map'
+    pose.header.stamp = navigator.get_clock().now().to_msg()
+    pose.pose.position.x = float(x)
+    pose.pose.position.y = float(y)
+    pose.pose.orientation.z = math.sin(yaw / 2.0)
+    pose.pose.orientation.w = math.cos(yaw / 2.0)
+    return pose
+
+
+def timed_samples(path, nominal_speed):
+    samples = []
+    elapsed = 0.0
+    previous = None
+    for index, pose in enumerate(path.poses):
+        point = pose.pose.position
+        if previous is not None:
+            elapsed += math.hypot(
+                point.x - previous.x, point.y - previous.y) / nominal_speed
+        samples.append(TimedSample(index, point.x, point.y, elapsed))
+        previous = point
+    return samples
+
+
+def stamp_predicted_path(path, samples, node):
+    predicted = deepcopy(path)
+    start = node.get_clock().now()
+    predicted.header.stamp = start.to_msg()
+    for pose, sample in zip(predicted.poses, samples):
+        pose.header.stamp = (start + Duration(seconds=sample.time)).to_msg()
+    return predicted
+
+
+def find_conflicts(samples1, samples2, clearance, time_margin):
+    conflicts = []
+    for sample1 in samples1:
+        for sample2 in samples2:
+            if abs(sample1.time - sample2.time) > time_margin:
+                continue
+            distance = math.hypot(sample1.x - sample2.x, sample1.y - sample2.y)
+            if distance <= clearance:
+                conflicts.append(Conflict(
+                    sample1.index, sample2.index,
+                    (sample1.x + sample2.x) / 2.0,
+                    (sample1.y + sample2.y) / 2.0,
+                    sample1.time, sample2.time))
+    return conflicts
+
+
+def index_before_distance(samples, conflict_index, distance):
+    target = samples[conflict_index]
+    index = conflict_index
+    while index > 0:
+        candidate = samples[index]
+        if math.hypot(candidate.x - target.x, candidate.y - target.y) >= distance:
+            return index
+        index -= 1
+    return 0
+
+
+def index_after_distance(samples, conflict_index, distance):
+    target = samples[conflict_index]
+    index = conflict_index
+    while index < len(samples) - 1:
+        candidate = samples[index]
+        if math.hypot(candidate.x - target.x, candidate.y - target.y) >= distance:
+            return index
+        index += 1
+    return len(samples) - 1
+
+
+def nearest_progress(samples, x, y, previous_index):
+    start = max(0, previous_index - 5)
+    nearest = min(
+        range(start, len(samples)),
+        key=lambda index: math.hypot(
+            samples[index].x - x, samples[index].y - y))
+    return max(previous_index, nearest)
+
+
+def result_name(result):
+    if result == TaskResult.SUCCEEDED:
+        return 'SUCCEEDED'
+    if result == TaskResult.CANCELED:
+        return 'CANCELED'
+    if result == TaskResult.FAILED:
+        return 'FAILED'
+    return f'UNKNOWN({result})'
+
+
+class SchedulerView:
+    def __init__(self, node):
+        qos = QoSProfile(depth=1)
+        qos.reliability = ReliabilityPolicy.RELIABLE
+        qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.node = node
+        self.state_publisher = node.create_publisher(
+            String, '/coordination/state', qos)
+        self.marker_publisher = node.create_publisher(
+            MarkerArray, '/coordination/markers', qos)
+        self.path_publishers = {
+            'robot1': node.create_publisher(
+                Path, '/coordination/robot1_predicted_path', qos),
+            'robot2': node.create_publisher(
+                Path, '/coordination/robot2_predicted_path', qos),
+        }
+        self.paths = {}
+        self.conflicts = []
+        self.hold_point = None
+        self.last_state = None
+
+    def set_plan(self, path1, path2, conflicts, hold_point=None):
+        self.paths = {'robot1': path1, 'robot2': path2}
+        self.conflicts = conflicts
+        self.hold_point = hold_point
+
+    def publish(self, state, detail, released=False):
+        if state != self.last_state:
+            self.node.get_logger().info(f'[SCHEDULER] {state}: {detail}')
+            self.last_state = state
+        message = String()
+        message.data = f'{state}: {detail}'
+        self.state_publisher.publish(message)
+        for name, path in self.paths.items():
+            self.path_publishers[name].publish(path)
+        self._publish_markers(state, detail, released)
+
+    def _publish_markers(self, state, detail, released):
+        now = self.node.get_clock().now().to_msg()
+        markers = MarkerArray()
+        colors = {
+            'robot1': (0.10, 0.45, 1.0),
+            'robot2': (1.0, 0.45, 0.08),
+        }
+        for marker_id, name in enumerate(('robot1', 'robot2'), start=10):
+            if name not in self.paths:
+                continue
+            marker = Marker()
+            marker.header.frame_id = 'map'
+            marker.header.stamp = now
+            marker.ns = 'predicted_trajectories'
+            marker.id = marker_id
+            marker.type = Marker.LINE_STRIP
+            marker.action = Marker.ADD
+            marker.scale.x = 0.055
+            marker.color.r, marker.color.g, marker.color.b = colors[name]
+            marker.color.a = 0.9
+            marker.points = [deepcopy(pose.pose.position)
+                             for pose in self.paths[name].poses]
+            markers.markers.append(marker)
+
+        conflict_marker = Marker()
+        conflict_marker.header.frame_id = 'map'
+        conflict_marker.header.stamp = now
+        conflict_marker.ns = 'detected_conflicts'
+        conflict_marker.id = 20
+        conflict_marker.type = Marker.SPHERE_LIST
+        conflict_marker.action = Marker.ADD
+        conflict_marker.scale.x = 0.20
+        conflict_marker.scale.y = 0.20
+        conflict_marker.scale.z = 0.10
+        conflict_marker.color.r = 0.1 if released else 1.0
+        conflict_marker.color.g = 0.9 if released else 0.1
+        conflict_marker.color.b = 0.1
+        conflict_marker.color.a = 0.65
+        stride = max(1, len(self.conflicts) // 80)
+        for conflict in self.conflicts[::stride]:
+            conflict_marker.points.append(
+                Point(x=conflict.x, y=conflict.y, z=0.08))
+        markers.markers.append(conflict_marker)
+
+        if self.hold_point is not None:
+            hold = Marker()
+            hold.header.frame_id = 'map'
+            hold.header.stamp = now
+            hold.ns = 'yield_point'
+            hold.id = 21
+            hold.type = Marker.CYLINDER
+            hold.action = Marker.ADD
+            hold.pose.position.x = self.hold_point.pose.position.x
+            hold.pose.position.y = self.hold_point.pose.position.y
+            hold.pose.position.z = 0.04
+            hold.pose.orientation.w = 1.0
+            hold.scale.x = 0.7
+            hold.scale.y = 0.7
+            hold.scale.z = 0.08
+            hold.color.r = 1.0
+            hold.color.g = 0.8
+            hold.color.b = 0.05
+            hold.color.a = 0.5
+            markers.markers.append(hold)
+
+        label = Marker()
+        label.header.frame_id = 'map'
+        label.header.stamp = now
+        label.ns = 'coordination_state'
+        label.id = 22
+        label.type = Marker.TEXT_VIEW_FACING
+        label.action = Marker.ADD
+        if self.conflicts:
+            label.pose.position.x = self.conflicts[0].x
+            label.pose.position.y = self.conflicts[0].y
+        label.pose.position.z = 1.3
+        label.pose.orientation.w = 1.0
+        label.scale.z = 0.28
+        label.color.r = 1.0
+        label.color.g = 1.0
+        label.color.b = 1.0
+        label.color.a = 1.0
+        label.text = f'{state}\n{detail}'
+        markers.markers.append(label)
+        self.marker_publisher.publish(markers)
+
+
+def choose_priority(conflicts, priorities):
+    first = min(conflicts, key=lambda item: max(item.time1, item.time2))
+    if priorities['robot1'] != priorities['robot2']:
+        if priorities['robot1'] > priorities['robot2']:
+            return 'robot1', 'robot2'
+        return 'robot2', 'robot1'
+    if abs(first.time1 - first.time2) > 0.25:
+        if first.time1 < first.time2:
+            return 'robot1', 'robot2'
+        return 'robot2', 'robot1'
+    return 'robot1', 'robot2'
+
+
+def wait_for_tasks(navigators, active_names, timeout, view, state, detail):
+    start = time.monotonic()
+    done = {name: False for name in active_names}
+    while rclpy.ok() and not all(done.values()):
+        for name in active_names:
+            done[name] = done[name] or navigators[name].isTaskComplete()
+        if time.monotonic() - start > timeout:
+            raise TimeoutError(f'{state} timed out')
+        view.publish(state, detail)
+        time.sleep(0.1)
+    return {name: navigators[name].getResult() for name in active_names}
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    robot1 = BasicNavigator(node_name='trajectory_coordinator', namespace='robot1')
+    robot2 = BasicNavigator(node_name='trajectory_coordinator', namespace='robot2')
+    navigators = {'robot1': robot1, 'robot2': robot2}
+    view = SchedulerView(robot1)
+
+    parameters = {
+        'nominal_speed': 0.45,
+        'clearance': 0.80,
+        'time_margin': 1.50,
+        'hold_distance': 1.10,
+        'release_distance': 0.90,
+        'robot1_priority': 0,
+        'robot2_priority': 0,
+        'timeout': 240.0,
+    }
+    for name, value in parameters.items():
+        robot1.declare_parameter(name, value)
+        parameters[name] = robot1.get_parameter(name).value
+
+    starts = {
+        'robot1': make_pose(robot1, -3.0, -2.0),
+        'robot2': make_pose(robot2, -3.0, 2.0),
+    }
+    goals = {
+        'robot1': make_pose(robot1, 3.0, -0.6),
+        'robot2': make_pose(robot2, 3.0, 0.6),
+    }
+    robot1.setInitialPose(starts['robot1'])
+    robot2.setInitialPose(starts['robot2'])
+    success = False
+
+    try:
+        view.publish('WAITING_FOR_NAV2', '正在启动两套导航系统')
+        robot1.waitUntilNav2Active()
+        robot2.waitUntilNav2Active()
+        view.publish('PLANNING_TRAJECTORIES', '请求两条独立全局路径')
+        paths = {
+            name: navigators[name].getPath(
+                starts[name], goals[name], use_start=True)
+            for name in ('robot1', 'robot2')
+        }
+        if any(path is None or not path.poses for path in paths.values()):
+            raise RuntimeError('global planner failed to produce both paths')
+
+        samples = {
+            name: timed_samples(paths[name], float(parameters['nominal_speed']))
+            for name in ('robot1', 'robot2')
+        }
+        predicted = {
+            name: stamp_predicted_path(paths[name], samples[name], robot1)
+            for name in ('robot1', 'robot2')
+        }
+        conflicts = find_conflicts(
+            samples['robot1'], samples['robot2'],
+            float(parameters['clearance']),
+            float(parameters['time_margin']))
+
+        if not conflicts:
+            view.set_plan(predicted['robot1'], predicted['robot2'], [])
+            view.publish('NO_CONFLICT', '两条预测轨迹可同时执行')
+            robot1.goToPose(goals['robot1'])
+            robot2.goToPose(goals['robot2'])
+            results = wait_for_tasks(
+                navigators, ('robot1', 'robot2'),
+                float(parameters['timeout']), view,
+                'BOTH_NAVIGATING', '未发现时空冲突')
+        else:
+            priorities = {
+                'robot1': int(parameters['robot1_priority']),
+                'robot2': int(parameters['robot2_priority']),
+            }
+            granted, yielding = choose_priority(conflicts, priorities)
+            conflict_indices = {
+                'robot1': [item.index1 for item in conflicts],
+                'robot2': [item.index2 for item in conflicts],
+            }
+            hold_index = index_before_distance(
+                samples[yielding], min(conflict_indices[yielding]),
+                float(parameters['hold_distance']))
+            release_index = index_after_distance(
+                samples[granted], max(conflict_indices[granted]),
+                float(parameters['release_distance']))
+            hold_point = deepcopy(paths[yielding].poses[hold_index])
+            view.set_plan(
+                predicted['robot1'], predicted['robot2'],
+                conflicts, hold_point)
+            first_time = min(max(item.time1, item.time2)
+                             for item in conflicts)
+            view.publish(
+                'CONFLICT_DETECTED',
+                f'预计 t={first_time:.1f}s 冲突；{granted} 通行，{yielding} 让行')
+
+            navigators[granted].goToPose(goals[granted])
+            hold_needed = hold_index > 2
+            if hold_needed:
+                navigators[yielding].goToPose(hold_point)
+
+            progress = 0
+            start = time.monotonic()
+            granted_done = False
+            while rclpy.ok():
+                granted_done = navigators[granted].isTaskComplete()
+                if hold_needed:
+                    navigators[yielding].isTaskComplete()
+                feedback = navigators[granted].getFeedback()
+                if feedback is not None:
+                    point = feedback.current_pose.pose.position
+                    progress = nearest_progress(
+                        samples[granted], point.x, point.y, progress)
+                cleared = progress >= release_index
+                succeeded = (granted_done and
+                             navigators[granted].getResult() ==
+                             TaskResult.SUCCEEDED)
+                if cleared or succeeded:
+                    break
+                if granted_done:
+                    raise RuntimeError(
+                        f'{granted} failed before clearing conflict')
+                if time.monotonic() - start > float(parameters['timeout']):
+                    raise TimeoutError(
+                        'granted robot did not clear conflict')
+                view.publish(
+                    'YIELDING',
+                    f'{yielding} 在预测等待点让行；{granted} 穿越冲突区')
+                time.sleep(0.1)
+
+            if hold_needed and not navigators[yielding].isTaskComplete():
+                navigators[yielding].cancelTask()
+            navigators[yielding].goToPose(goals[yielding])
+            view.publish(
+                'RESERVATION_RELEASED',
+                f'{granted} 已越过最后冲突点；放行 {yielding}', released=True)
+
+            active = [yielding]
+            if not granted_done:
+                active.append(granted)
+            remaining = wait_for_tasks(
+                navigators, active, float(parameters['timeout']), view,
+                'COORDINATED_NAVIGATION',
+                f'{yielding} 继续执行，冲突预约已释放')
+            results = {
+                granted: (navigators[granted].getResult()
+                          if granted in active else TaskResult.SUCCEEDED)
+            }
+            results.update(remaining)
+
+        success = all(result == TaskResult.SUCCEEDED
+                      for result in results.values())
+        view.publish(
+            'COMPLETE' if success else 'FAILED',
+            ', '.join(f'{name}={result_name(result)}'
+                      for name, result in sorted(results.items())),
+            released=True)
+        time.sleep(1.0)
+    except (KeyboardInterrupt, TimeoutError, RuntimeError) as error:
+        robot1.get_logger().error(f'[SCHEDULER] {error}')
+        robot1.cancelTask()
+        robot2.cancelTask()
+    finally:
+        robot1.destroy_node()
+        robot2.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+    if not success:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

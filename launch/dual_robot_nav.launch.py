@@ -133,7 +133,6 @@ def _nav2_bringup(bringup_dir, namespace, map_file, params_file, condition):
 def generate_launch_description():
     package_share = get_package_share_directory('mecanum_multi_nav')
     bringup_dir = get_package_share_directory('nav2_bringup')
-    world_ogre = _render_world(package_share, 'ogre')
     world_ogre2 = _render_world(package_share, 'ogre2')
     default_world = os.path.join(package_share, 'worlds', 'arena.sdf')
     default_map = os.path.join(package_share, 'maps', 'arena.yaml')
@@ -331,6 +330,11 @@ def generate_launch_description():
                 _nav2_bringup(
                     bringup_dir, 'robot1', map_file, robot1_params,
                     UnlessCondition(native_lidar)),
+            ],
+        ),
+        TimerAction(
+            period=7.0,
+            actions=[
                 _nav2_bringup(
                     bringup_dir, 'robot2', map_file, robot2_params,
                     UnlessCondition(native_lidar)),
@@ -342,6 +346,11 @@ def generate_launch_description():
                 _nav2_bringup(
                     bringup_dir, 'robot1', map_file, robot1_native_params,
                     IfCondition(native_lidar)),
+            ],
+        ),
+        TimerAction(
+            period=27.0,
+            actions=[
                 _nav2_bringup(
                     bringup_dir, 'robot2', map_file, robot2_native_params,
                     IfCondition(native_lidar)),
