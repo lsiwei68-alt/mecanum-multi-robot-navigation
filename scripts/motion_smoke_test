@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+import math
+import sys
+import time
+
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.node import Node
+
+
+def yaw_from_quaternion(q):
+    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def normalized_angle(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+class MotionSmokeTest(Node):
+    def __init__(self):
+        super().__init__('motion_smoke_test')
+        self.declare_parameter('robot_name', 'robot1')
+        self.robot_name = self.get_parameter('robot_name').value
+        self.odom = None
+        self.publisher = self.create_publisher(
+            Twist, f'/{self.robot_name}/cmd_vel', 10)
+        self.subscription = self.create_subscription(
+            Odometry, f'/{self.robot_name}/odom', self._on_odom, 10)
+
+    def _on_odom(self, message):
+        self.odom = message
+
+    def wait_for_odom(self, timeout=15.0):
+        deadline = time.monotonic() + timeout
+        while rclpy.ok() and self.odom is None and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        return self.odom is not None
+
+    def pose(self):
+        position = self.odom.pose.pose.position
+        orientation = self.odom.pose.pose.orientation
+        return position.x, position.y, yaw_from_quaternion(orientation)
+
+    def command(self, vx=0.0, vy=0.0, wz=0.0, duration=2.0):
+        message = Twist()
+        message.linear.x = vx
+        message.linear.y = vy
+        message.angular.z = wz
+        deadline = time.monotonic() + duration
+        while rclpy.ok() and time.monotonic() < deadline:
+            self.publisher.publish(message)
+            rclpy.spin_once(self, timeout_sec=0.02)
+            time.sleep(0.03)
+
+        stop = Twist()
+        for _ in range(12):
+            self.publisher.publish(stop)
+            rclpy.spin_once(self, timeout_sec=0.03)
+            time.sleep(0.03)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MotionSmokeTest()
+    if not node.wait_for_odom():
+        node.get_logger().error('No odometry received within 15 seconds.')
+        node.destroy_node()
+        rclpy.shutdown()
+        sys.exit(2)
+
+    start = node.pose()
+    node.get_logger().info(f'Start pose: {start}')
+
+    node.command(vx=0.35, duration=2.0)
+    after_forward = node.pose()
+    node.get_logger().info(f'After forward: {after_forward}')
+
+    node.command(vy=0.35, duration=2.0)
+    after_lateral = node.pose()
+    node.get_logger().info(f'After lateral: {after_lateral}')
+
+    node.command(wz=0.6, duration=2.0)
+    after_rotation = node.pose()
+    node.get_logger().info(f'After rotation: {after_rotation}')
+
+    forward_distance = math.hypot(
+        after_forward[0] - start[0], after_forward[1] - start[1])
+    lateral_distance = math.hypot(
+        after_lateral[0] - after_forward[0],
+        after_lateral[1] - after_forward[1],
+    )
+    yaw_change = abs(normalized_angle(after_rotation[2] - after_lateral[2]))
+
+    checks = {
+        'forward translation': forward_distance > 0.25,
+        'lateral translation': lateral_distance > 0.25,
+        'rotation': yaw_change > 0.45,
+    }
+    for label, passed in checks.items():
+        node.get_logger().info(f'{label}: {"PASS" if passed else "FAIL"}')
+
+    node.command()
+    success = all(checks.values())
+    node.destroy_node()
+    rclpy.shutdown()
+    if not success:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

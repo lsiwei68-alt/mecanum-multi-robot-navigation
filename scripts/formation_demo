@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+import math
+import sys
+import time
+
+from geometry_msgs.msg import PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+import rclpy
+
+
+def make_pose(navigator, x, y, yaw):
+    pose = PoseStamped()
+    pose.header.frame_id = 'map'
+    pose.header.stamp = navigator.get_clock().now().to_msg()
+    pose.pose.position.x = float(x)
+    pose.pose.position.y = float(y)
+    pose.pose.orientation.z = math.sin(yaw / 2.0)
+    pose.pose.orientation.w = math.cos(yaw / 2.0)
+    return pose
+
+
+def task_name(result):
+    if result == TaskResult.SUCCEEDED:
+        return 'SUCCEEDED'
+    if result == TaskResult.CANCELED:
+        return 'CANCELED'
+    if result == TaskResult.FAILED:
+        return 'FAILED'
+    return f'UNKNOWN({result})'
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    robot1 = BasicNavigator(node_name='formation_robot1', namespace='robot1')
+    robot2 = BasicNavigator(node_name='formation_robot2', namespace='robot2')
+
+    for node in (robot1, robot2):
+        node.declare_parameter('goal_x', 3.0)
+        node.declare_parameter('goal_y', 0.0)
+        node.declare_parameter('goal_yaw', 0.0)
+        node.declare_parameter('spacing', 1.2)
+
+    goal_x = robot1.get_parameter('goal_x').value
+    goal_y = robot1.get_parameter('goal_y').value
+    goal_yaw = robot1.get_parameter('goal_yaw').value
+    spacing = robot1.get_parameter('spacing').value
+
+    initial1 = make_pose(robot1, -3.0, -2.0, 0.0)
+    initial2 = make_pose(robot2, -3.0, 2.0, 0.0)
+    robot1.setInitialPose(initial1)
+    robot2.setInitialPose(initial2)
+
+    robot1.get_logger().info('Waiting for robot1 Nav2 to become active...')
+    robot1.waitUntilNav2Active()
+    robot2.get_logger().info('Waiting for robot2 Nav2 to become active...')
+    robot2.waitUntilNav2Active()
+
+    # The two slots are perpendicular to the requested final heading, so both
+    # robots finish side-by-side with the same orientation.
+    offset_x = -math.sin(goal_yaw) * spacing / 2.0
+    offset_y = math.cos(goal_yaw) * spacing / 2.0
+    slot_a = (goal_x - offset_x, goal_y - offset_y)
+    slot_b = (goal_x + offset_x, goal_y + offset_y)
+
+    # Two-robot assignment minimizing total straight-line distance.
+    direct = math.dist((-3.0, -2.0), slot_a) + math.dist((-3.0, 2.0), slot_b)
+    swapped = math.dist((-3.0, -2.0), slot_b) + math.dist((-3.0, 2.0), slot_a)
+    if swapped < direct:
+        slot_a, slot_b = slot_b, slot_a
+
+    goal1 = make_pose(robot1, slot_a[0], slot_a[1], goal_yaw)
+    goal2 = make_pose(robot2, slot_b[0], slot_b[1], goal_yaw)
+    robot1.get_logger().info(
+        f'Formation slots: robot1={slot_a}, robot2={slot_b}, yaw={goal_yaw:.3f}')
+
+    robot1.goToPose(goal1)
+    robot2.goToPose(goal2)
+
+    start = time.monotonic()
+    done1 = False
+    done2 = False
+    while rclpy.ok() and not (done1 and done2):
+        done1 = done1 or robot1.isTaskComplete()
+        done2 = done2 or robot2.isTaskComplete()
+        if time.monotonic() - start > 180.0:
+            robot1.get_logger().error('Formation navigation timed out after 180 seconds.')
+            robot1.cancelTask()
+            robot2.cancelTask()
+            break
+        time.sleep(0.1)
+
+    result1 = robot1.getResult()
+    result2 = robot2.getResult()
+    robot1.get_logger().info(f'robot1 result: {task_name(result1)}')
+    robot2.get_logger().info(f'robot2 result: {task_name(result2)}')
+    success = result1 == TaskResult.SUCCEEDED and result2 == TaskResult.SUCCEEDED
+
+    robot1.destroy_node()
+    robot2.destroy_node()
+    rclpy.shutdown()
+    if not success:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

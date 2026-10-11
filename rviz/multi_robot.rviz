@@ -1,0 +1,294 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Robot 1
+        - /Robot 2
+    Tree Height: 760
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Alpha: 0.5
+      Cell Size: 1
+      Color: 120; 120; 120
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/Map
+      Name: Shared Map
+      Enabled: true
+      Alpha: 0.8
+      Color Scheme: map
+      Draw Behind: true
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot1/map
+      Use Timestamp: false
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Robot Bodies and Labels
+      Enabled: true
+      Marker Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_visualization
+      Namespaces:
+        robot1: true
+        robot2: true
+      Queue Size: 10
+    - Class: rviz_common/Group
+      Name: Robot 1
+      Enabled: true
+      Displays:
+        - Class: rviz_default_plugins/Odometry
+          Name: Pose
+          Enabled: false
+          Keep: 1
+          Shape:
+            Alpha: 1
+            Color: 40; 120; 255
+            Head Length: 0.25
+            Head Radius: 0.12
+            Shaft Length: 0.45
+            Shaft Radius: 0.06
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot1/odom
+        - Class: rviz_default_plugins/LaserScan
+          Name: Scan
+          Enabled: true
+          Alpha: 0.75
+          Color: 255; 0; 255
+          Color Transformer: FlatColor
+          Decay Time: 0.2
+          Position Transformer: XYZ
+          Size (Pixels): 5
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Best Effort
+            Value: /robot1/scan
+          Use Fixed Frame: true
+        - Class: rviz_default_plugins/Map
+          Name: Global Costmap
+          Enabled: false
+          Alpha: 0.2
+          Color Scheme: costmap
+          Draw Behind: false
+          Topic:
+            Depth: 1
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot1/global_costmap/costmap
+          Use Timestamp: false
+        - Class: rviz_default_plugins/Map
+          Name: Local Costmap
+          Enabled: true
+          Alpha: 0.5
+          Color Scheme: costmap
+          Draw Behind: false
+          Topic:
+            Depth: 1
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot1/local_costmap/costmap
+          Use Timestamp: false
+        - Class: rviz_default_plugins/Path
+          Name: Global Path
+          Enabled: true
+          Alpha: 1
+          Buffer Length: 1
+          Color: 30; 90; 255
+          Line Style: Lines
+          Line Width: 0.06
+          Pose Style: None
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot1/plan
+        - Class: rviz_default_plugins/Path
+          Name: Local Path
+          Enabled: true
+          Alpha: 1
+          Buffer Length: 1
+          Color: 0; 255; 255
+          Line Style: Lines
+          Line Width: 0.08
+          Pose Style: None
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot1/local_plan
+        - Class: rviz_default_plugins/Polygon
+          Name: Footprint
+          Enabled: false
+          Alpha: 1
+          Color: 40; 120; 255
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot1/local_costmap/published_footprint
+    - Class: rviz_common/Group
+      Name: Robot 2
+      Enabled: true
+      Displays:
+        - Class: rviz_default_plugins/Odometry
+          Name: Pose
+          Enabled: false
+          Keep: 1
+          Shape:
+            Alpha: 1
+            Color: 255; 80; 40
+            Head Length: 0.25
+            Head Radius: 0.12
+            Shaft Length: 0.45
+            Shaft Radius: 0.06
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot2/odom
+        - Class: rviz_default_plugins/LaserScan
+          Name: Scan
+          Enabled: false
+          Alpha: 0.75
+          Color: 255; 80; 40
+          Color Transformer: FlatColor
+          Decay Time: 0.2
+          Position Transformer: XYZ
+          Size (Pixels): 3
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Best Effort
+            Value: /robot2/scan
+          Use Fixed Frame: true
+        - Class: rviz_default_plugins/Map
+          Name: Global Costmap
+          Enabled: false
+          Alpha: 0.2
+          Color Scheme: costmap
+          Draw Behind: false
+          Topic:
+            Depth: 1
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot2/global_costmap/costmap
+          Use Timestamp: false
+        - Class: rviz_default_plugins/Map
+          Name: Local Costmap
+          Enabled: false
+          Alpha: 0.35
+          Color Scheme: costmap
+          Draw Behind: false
+          Topic:
+            Depth: 1
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot2/local_costmap/costmap
+          Use Timestamp: false
+        - Class: rviz_default_plugins/Path
+          Name: Global Path
+          Enabled: true
+          Alpha: 1
+          Buffer Length: 1
+          Color: 255; 50; 50
+          Line Style: Lines
+          Line Width: 0.06
+          Pose Style: None
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot2/plan
+        - Class: rviz_default_plugins/Path
+          Name: Local Path
+          Enabled: true
+          Alpha: 1
+          Buffer Length: 1
+          Color: 255; 220; 0
+          Line Style: Lines
+          Line Width: 0.08
+          Pose Style: None
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot2/local_plan
+        - Class: rviz_default_plugins/Polygon
+          Name: Footprint
+          Enabled: false
+          Alpha: 1
+          Color: 255; 80; 40
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /robot2/local_costmap/published_footprint
+    - Class: rviz_default_plugins/TF
+      Name: Combined TF
+      Enabled: false
+      Frame Timeout: 15
+      Marker Scale: 0.4
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+  Enabled: true
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: map
+    Frame Rate: 20
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Views:
+    Current:
+      Angle: -1.5708
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top Down
+      Scale: 90
+      Target Frame: <Fixed Frame>
+      X: 0
+      Y: 0
+Window Geometry:
+  Height: 900
+  Width: 1250
