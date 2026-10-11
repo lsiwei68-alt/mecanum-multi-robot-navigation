@@ -84,6 +84,7 @@ class SyntheticLidar(Node):
                              if scenario == 'narrow_passage'
                              else STATIC_BOXES)
         self.own_pose = None
+        self.own_stamp = None
         self.other_pose = None
         self.create_subscription(
             Odometry, f'/{self.robot_name}/odom', self._own_odom, 10)
@@ -104,16 +105,21 @@ class SyntheticLidar(Node):
 
     def _own_odom(self, message):
         self.own_pose = self._pose(message)
+        self.own_stamp = message.header.stamp
 
     def _other_odom(self, message):
         self.other_pose = self._pose(message)
 
     def _publish_scan(self):
-        if self.own_pose is None:
+        if self.own_pose is None or self.own_stamp is None:
             return
         x, y, yaw = self.own_pose
         message = LaserScan()
-        message.header.stamp = self.get_clock().now().to_msg()
+        # Gazebo publishes odometry and odom->base_link TF from the same
+        # simulation update.  Reuse that stamp so AMCL never receives a scan
+        # older than the TF cache due to /clock bridge latency.
+        message.header.stamp.sec = self.own_stamp.sec
+        message.header.stamp.nanosec = self.own_stamp.nanosec
         message.header.frame_id = f'{self.robot_name}/lidar_link'
         message.angle_min = -math.pi
         message.angle_max = math.pi

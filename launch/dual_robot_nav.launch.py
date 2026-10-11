@@ -34,6 +34,8 @@ def _render_nav2_params(package_share, namespace, native_lidar=False):
     source = os.path.join(package_share, 'config', 'nav2_omni.yaml')
     with open(source, 'r', encoding='utf-8') as params:
         rendered = params.read().replace('__NS__', namespace)
+    initial_y = '-2.0' if namespace == 'robot1' else '2.0'
+    rendered = rendered.replace('__INITIAL_Y__', initial_y)
     if native_lidar:
         rendered = rendered.replace('scan_topic: scan_static', 'scan_topic: scan')
     suffix = '_native_lidar' if native_lidar else ''
@@ -262,7 +264,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'headless', default_value='false',
+            'headless', default_value='true',
             description='Run only the Gazebo server without the GUI.',
         ),
         DeclareLaunchArgument(

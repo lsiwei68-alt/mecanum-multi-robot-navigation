@@ -36,7 +36,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/MarkerArray
       Name: Robot Bodies and Labels
       Enabled: true
-      Marker Topic:
+      Topic:
         Depth: 1
         Durability Policy: Transient Local
         History Policy: Keep Last
@@ -49,14 +49,17 @@ Visualization Manager:
     - Class: rviz_default_plugins/MarkerArray
       Name: Passage Scheduler
       Enabled: true
-      Marker Topic:
+      Topic:
         Depth: 1
         Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /coordination/markers
       Namespaces:
-        coordination: true
+        coordination_state: true
+        detected_conflicts: true
+        predicted_trajectories: true
+        yield_point: true
       Queue Size: 10
     - Class: rviz_common/Group
       Name: Robot 1
@@ -64,7 +67,7 @@ Visualization Manager:
       Displays:
         - Class: rviz_default_plugins/Odometry
           Name: Pose
-          Enabled: false
+          Enabled: true
           Keep: 1
           Shape:
             Alpha: 1
@@ -155,7 +158,7 @@ Visualization Manager:
             Value: /robot1/local_plan
         - Class: rviz_default_plugins/Polygon
           Name: Footprint
-          Enabled: false
+          Enabled: true
           Alpha: 1
           Color: 40; 120; 255
           Topic:
@@ -170,7 +173,7 @@ Visualization Manager:
       Displays:
         - Class: rviz_default_plugins/Odometry
           Name: Pose
-          Enabled: false
+          Enabled: true
           Keep: 1
           Shape:
             Alpha: 1
@@ -261,7 +264,7 @@ Visualization Manager:
             Value: /robot2/local_plan
         - Class: rviz_default_plugins/Polygon
           Name: Footprint
-          Enabled: false
+          Enabled: true
           Alpha: 1
           Color: 255; 80; 40
           Topic:

@@ -4,6 +4,7 @@ import sys
 import time
 
 from geometry_msgs.msg import PoseStamped
+from mecanum_multi_nav.nav2_readiness import start_navigation, wait_for_nav2
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy
 
@@ -45,15 +46,10 @@ def main(args=None):
     goal_yaw = robot1.get_parameter('goal_yaw').value
     spacing = robot1.get_parameter('spacing').value
 
-    initial1 = make_pose(robot1, -3.0, -2.0, 0.0)
-    initial2 = make_pose(robot2, -3.0, 2.0, 0.0)
-    robot1.setInitialPose(initial1)
-    robot2.setInitialPose(initial2)
-
     robot1.get_logger().info('Waiting for robot1 Nav2 to become active...')
-    robot1.waitUntilNav2Active()
+    wait_for_nav2(robot1)
     robot2.get_logger().info('Waiting for robot2 Nav2 to become active...')
-    robot2.waitUntilNav2Active()
+    wait_for_nav2(robot2)
 
     # The two slots are perpendicular to the requested final heading, so both
     # robots finish side-by-side with the same orientation.
@@ -73,8 +69,8 @@ def main(args=None):
     robot1.get_logger().info(
         f'Formation slots: robot1={slot_a}, robot2={slot_b}, yaw={goal_yaw:.3f}')
 
-    robot1.goToPose(goal1)
-    robot2.goToPose(goal2)
+    start_navigation(robot1, goal1)
+    start_navigation(robot2, goal2)
 
     start = time.monotonic()
     done1 = False

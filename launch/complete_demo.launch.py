@@ -26,7 +26,7 @@ def generate_launch_description():
     spacing = LaunchConfiguration('spacing')
 
     return LaunchDescription([
-        DeclareLaunchArgument('headless', default_value='false'),
+        DeclareLaunchArgument('headless', default_value='true'),
         DeclareLaunchArgument('native_lidar', default_value='false'),
         DeclareLaunchArgument('software_rendering', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
@@ -51,7 +51,9 @@ def generate_launch_description():
                 condition=IfCondition(use_rviz),
             ),
         ]),
-        TimerAction(period=13.0, actions=[
+        # Start the navigator early so it can wait on lifecycle readiness;
+        # AMCL obtains each known spawn pose from the generated parameters.
+        TimerAction(period=3.0, actions=[
             Node(
                 package='mecanum_multi_nav', executable='formation_demo',
                 name='formation_demo_launcher', output='screen',

@@ -28,6 +28,16 @@ amcl:
     resample_interval: 1
     robot_model_type: "nav2_amcl::OmniMotionModel"
     save_pose_rate: 0.5
+    # The simulator starts each robot at a known pose.  Let AMCL initialize
+    # itself during lifecycle activation instead of racing a later
+    # /initialpose publication against the odometry TF bridge.
+    set_initial_pose: true
+    always_reset_initial_pose: true
+    initial_pose:
+      x: -3.0
+      y: __INITIAL_Y__
+      z: 0.0
+      yaw: 0.0
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0

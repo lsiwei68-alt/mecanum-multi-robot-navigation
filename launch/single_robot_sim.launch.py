@@ -95,7 +95,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'headless', default_value='false',
+            'headless', default_value='true',
             description='Run only the Gazebo server without the GUI.',
         ),
         gazebo_gui,

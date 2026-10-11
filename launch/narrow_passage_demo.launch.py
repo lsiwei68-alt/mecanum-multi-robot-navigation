@@ -21,7 +21,7 @@ def generate_launch_description():
     run_demo = LaunchConfiguration('run_demo')
 
     return LaunchDescription([
-        DeclareLaunchArgument('headless', default_value='false'),
+        DeclareLaunchArgument('headless', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('run_demo', default_value='true'),
         IncludeLaunchDescription(
@@ -43,6 +43,9 @@ def generate_launch_description():
                 condition=IfCondition(use_rviz),
             ),
         ]),
+        # Let localization and both costmaps settle before requesting the
+        # demonstration paths.  Interface discovery alone is too early and
+        # can make Navfn choose a different route from run to run.
         TimerAction(period=13.0, actions=[
             Node(
                 package='mecanum_multi_nav',
