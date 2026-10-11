@@ -119,6 +119,34 @@ source ~/multi_robot_nav_ws/install/setup.bash
 ros2 launch mecanum_multi_nav dual_rviz.launch.py
 ```
 
+## 第二阶段：狭窄通道中央调度
+
+第二阶段首先增加单车道通行权调度。两辆车位于通道左侧并准备前往右侧的编队
+终点。中央协调器先授权 robot1，robot2 在黄色等待区让行；当 robot1 的位置超过
+通道出口后，协调器释放预约区并授权 robot2。RViz 中红色半透明区域表示通道正在
+被预约，绿色表示已经释放，文字标记显示当前调度状态。
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/multi_robot_nav_ws/install/setup.bash
+ros2 launch mecanum_multi_nav narrow_passage_demo.launch.py
+```
+
+只显示 RViz、不打开 Gazebo GUI：
+
+```bash
+ros2 launch mecanum_multi_nav narrow_passage_demo.launch.py headless:=true
+```
+
+调度状态同时发布在 `/coordination/state`：
+
+```bash
+ros2 topic echo --qos-durability transient_local /coordination/state
+```
+
+当前策略是确定性的“robot1 优先 + 通道预约”。下一步将在此基础上加入对向会车、
+动态优先级、等待点导航和超时重规划。
+
 默认目标中心为 `(3.0, 0.0)`，朝向为 `0 rad`，两车中心距为 `1.2 m`。可覆盖参数：
 
 ```bash

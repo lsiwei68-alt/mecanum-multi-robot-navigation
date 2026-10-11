@@ -21,6 +21,13 @@ STATIC_BOXES = (
     (2.0, 2.6, 1.8, 3.2),
 )
 
+NARROW_PASSAGE_BOXES = (
+    (-0.15, 0.15, -4.9, -0.65),
+    (-0.15, 0.15, 0.65, 4.9),
+    (-2.4, -1.6, -3.45, -2.95),
+    (2.0, 2.6, 1.8, 3.2),
+)
+
 
 def yaw_from_quaternion(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
@@ -69,8 +76,13 @@ class SyntheticLidar(Node):
         super().__init__('synthetic_lidar')
         self.declare_parameter('robot_name', 'robot1')
         self.declare_parameter('other_robot', '')
+        self.declare_parameter('scenario', 'arena')
         self.robot_name = self.get_parameter('robot_name').value
         self.other_robot = self.get_parameter('other_robot').value
+        scenario = self.get_parameter('scenario').value
+        self.static_boxes = (NARROW_PASSAGE_BOXES
+                             if scenario == 'narrow_passage'
+                             else STATIC_BOXES)
         self.own_pose = None
         self.other_pose = None
         self.create_subscription(
@@ -119,7 +131,7 @@ class SyntheticLidar(Node):
             dx = math.cos(angle)
             dy = math.sin(angle)
             distance = ray_box_distance(x, y, dx, dy, walls)
-            for box in STATIC_BOXES:
+            for box in self.static_boxes:
                 distance = min(distance, ray_box_distance(x, y, dx, dy, box))
             static_ranges.append(max(message.range_min,
                                      min(message.range_max, distance)))
@@ -152,7 +164,8 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     node.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

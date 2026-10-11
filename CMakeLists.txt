@@ -12,6 +12,7 @@ install(
   PROGRAMS
     scripts/motion_smoke_test
     scripts/formation_demo
+    scripts/narrow_passage_coordinator
     scripts/synthetic_lidar
     scripts/tf_aggregator
     scripts/robot_markers

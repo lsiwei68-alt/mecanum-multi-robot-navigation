@@ -93,7 +93,7 @@ def _static_lidar_tf(namespace):
     )
 
 
-def _synthetic_lidar(namespace, other_namespace, native_lidar):
+def _synthetic_lidar(namespace, other_namespace, native_lidar, scenario):
     return Node(
         package='mecanum_multi_nav',
         executable='synthetic_lidar',
@@ -103,6 +103,7 @@ def _synthetic_lidar(namespace, other_namespace, native_lidar):
             'use_sim_time': True,
             'robot_name': namespace,
             'other_robot': other_namespace,
+            'scenario': scenario,
         }],
         output='screen',
         condition=UnlessCondition(native_lidar),
@@ -134,7 +135,11 @@ def generate_launch_description():
     bringup_dir = get_package_share_directory('nav2_bringup')
     world_ogre = _render_world(package_share, 'ogre')
     world_ogre2 = _render_world(package_share, 'ogre2')
-    map_file = os.path.join(package_share, 'maps', 'arena.yaml')
+    default_world = os.path.join(package_share, 'worlds', 'arena.sdf')
+    default_map = os.path.join(package_share, 'maps', 'arena.yaml')
+    world_file = LaunchConfiguration('world')
+    map_file = LaunchConfiguration('map')
+    scenario = LaunchConfiguration('scenario')
     headless = LaunchConfiguration('headless')
     native_lidar = LaunchConfiguration('native_lidar')
     software_rendering = LaunchConfiguration('software_rendering')
@@ -168,12 +173,12 @@ def generate_launch_description():
             '--render-engine', 'ogre',
             '--render-engine-gui', 'ogre',
             '--render-engine-server', 'ogre',
-            world_ogre,
+            world_file,
         ], output='screen',
         condition=gui_synthetic,
     )
     gazebo_server = ExecuteProcess(
-        cmd=['ign', 'gazebo', '-r', '-s', '--render-engine', 'ogre', world_ogre],
+        cmd=['ign', 'gazebo', '-r', '-s', '--render-engine', 'ogre', world_file],
         output='screen',
         condition=server_synthetic,
     )
@@ -269,6 +274,18 @@ def generate_launch_description():
             'software_rendering', default_value='true',
             description='Use reliable CPU Mesa for Ogre2; false tries WSLg NVIDIA.',
         ),
+        DeclareLaunchArgument(
+            'world', default_value=default_world,
+            description='SDF world used by the synthetic-lidar simulation.',
+        ),
+        DeclareLaunchArgument(
+            'map', default_value=default_map,
+            description='Known occupancy map loaded by both Nav2 stacks.',
+        ),
+        DeclareLaunchArgument(
+            'scenario', default_value='arena',
+            description='Geometry set used by the deterministic lidar.',
+        ),
         gazebo_gui,
         gazebo_server,
         gazebo_gui_native_software,
@@ -280,8 +297,8 @@ def generate_launch_description():
         _robot_bridge('robot2', UnlessCondition(native_lidar)),
         _static_lidar_tf('robot1'),
         _static_lidar_tf('robot2'),
-        _synthetic_lidar('robot1', 'robot2', native_lidar),
-        _synthetic_lidar('robot2', 'robot1', native_lidar),
+        _synthetic_lidar('robot1', 'robot2', native_lidar, scenario),
+        _synthetic_lidar('robot2', 'robot1', native_lidar, scenario),
         Node(
             package='mecanum_multi_nav', executable='tf_aggregator',
             name='tf_aggregator', output='screen',

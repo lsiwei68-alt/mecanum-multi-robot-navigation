@@ -97,7 +97,8 @@ def main(args=None):
 
     robot1.destroy_node()
     robot2.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():
+        rclpy.shutdown()
     if not success:
         sys.exit(1)
 
