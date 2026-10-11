@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generic path-driven two-robot spatiotemporal coordinator.
+"""Generic online two-robot spatiotemporal coordinator.
 
 The narrow passage is only a test scene. This node does not know its location:
-it plans both routes, predicts arrival time, detects overlapping space-time
-occupancy, and delays the lower-priority robot at a safe path point.
+it plans both routes, repeatedly predicts their remaining arrival times, detects
+overlapping space-time occupancy, and temporarily yields one robot at a safe
+path point.  Reservations are released from measured execution progress.
 """
 
 from copy import deepcopy
@@ -41,6 +42,26 @@ class Conflict:
     time2: float
 
 
+@dataclass
+class RobotRuntime:
+    name: str
+    navigator: object
+    path: Path
+    samples: list
+    goal: PoseStamped
+    x: float
+    y: float
+    speed: float
+    progress: int = 0
+    mode: str = 'goal'
+    active: bool = False
+    final_done: bool = False
+    result: object = None
+    last_x: float = None
+    last_y: float = None
+    last_stamp: float = None
+
+
 def make_pose(navigator, x, y, yaw=0.0):
     pose = PoseStamped()
     pose.header.frame_id = 'map'
@@ -66,12 +87,32 @@ def timed_samples(path, nominal_speed):
     return samples
 
 
-def stamp_predicted_path(path, samples, node):
-    predicted = deepcopy(path)
+def remaining_timed_samples(robot, minimum_speed, maximum_speed):
+    """Retimestamp the untraversed path from the robot's measured state."""
+    speed = min(max(robot.speed, minimum_speed), maximum_speed)
+    elapsed = 0.0
+    previous_x = robot.x
+    previous_y = robot.y
+    remaining = []
+    for sample in robot.samples[robot.progress:]:
+        elapsed += math.hypot(
+            sample.x - previous_x, sample.y - previous_y) / speed
+        remaining.append(TimedSample(
+            sample.index, sample.x, sample.y, elapsed))
+        previous_x = sample.x
+        previous_y = sample.y
+    return remaining
+
+
+def stamp_remaining_path(path, samples, node):
+    predicted = Path()
+    predicted.header.frame_id = path.header.frame_id
     start = node.get_clock().now()
     predicted.header.stamp = start.to_msg()
-    for pose, sample in zip(predicted.poses, samples):
+    for sample in samples:
+        pose = deepcopy(path.poses[sample.index])
         pose.header.stamp = (start + Duration(seconds=sample.time)).to_msg()
+        predicted.poses.append(pose)
     return predicted
 
 
@@ -237,30 +278,69 @@ class SchedulerView:
             hold.color.a = 0.8
             markers.markers.append(hold)
 
+        panel = Marker()
+        panel.header.frame_id = 'map'
+        panel.header.stamp = now
+        panel.ns = 'coordination_state'
+        panel.id = 22
+        panel.type = Marker.CUBE
+        panel.action = Marker.ADD
+        panel.pose.position.x = -3.55
+        panel.pose.position.y = 4.25
+        panel.pose.position.z = 0.035
+        panel.pose.orientation.w = 1.0
+        panel.scale.x = 2.75
+        panel.scale.y = 0.90
+        panel.scale.z = 0.035
+        panel.color.r = 0.02
+        panel.color.g = 0.04
+        panel.color.b = 0.09
+        panel.color.a = 0.72
+        markers.markers.append(panel)
+
         label = Marker()
         label.header.frame_id = 'map'
         label.header.stamp = now
         label.ns = 'coordination_state'
-        label.id = 22
+        label.id = 23
         label.type = Marker.TEXT_VIEW_FACING
         label.action = Marker.ADD
-        if self.conflicts:
-            label.pose.position.x = self.conflicts[0].x
-            label.pose.position.y = self.conflicts[0].y
-        label.pose.position.z = 1.3
+        label.pose.position.x = panel.pose.position.x
+        label.pose.position.y = panel.pose.position.y
+        label.pose.position.z = 0.12
         label.pose.orientation.w = 1.0
-        label.scale.z = 0.21
-        label.color.r = 1.0
-        label.color.g = 1.0
+        label.scale.z = 0.19
+        label.color.r = 0.35
+        label.color.g = 0.90
         label.color.b = 1.0
         label.color.a = 1.0
+        state_labels = {
+            'WAITING_FOR_NAV2': 'Waiting for Nav2',
+            'PLANNING_TRAJECTORIES': 'Planning both routes',
+            'ONLINE_MONITORING': 'Monitoring both robots',
+            'ONLINE_CONFLICT_DETECTED': 'Conflict detected',
+            'ONLINE_YIELDING': 'Reservation active - one robot yielding',
+            'ONLINE_RESERVATION_RELEASED': 'Reservation released',
+            'ONLINE_CLEAR': 'Conflict cleared - monitoring',
+            'COMPLETE': 'Both robots arrived',
+            'FAILED': 'Navigation failed',
+        }
+        if state == 'COMPLETE' or released:
+            label.color.r = 0.25
+            label.color.g = 1.0
+            label.color.b = 0.35
+        elif self.conflicts:
+            label.color.r = 1.0
+            label.color.g = 0.35
+            label.color.b = 0.25
         if not self.conflicts:
-            zone_state = 'NO SPATIOTEMPORAL CONFLICT'
+            zone_state = 'Conflict zone: none'
         elif released:
-            zone_state = 'GREEN: conflict reservation released'
+            zone_state = 'Conflict zone: RELEASED (green)'
         else:
-            zone_state = 'RED: predicted conflict zone'
-        label.text = f'{zone_state}\n{state}\n{detail}'
+            zone_state = 'Conflict zone: RESERVED (red)'
+        state_text = state_labels.get(state, state.replace('_', ' ').title())
+        label.text = f'ONLINE SCHEDULER\n{state_text}\n{zone_state}'
         markers.markers.append(label)
         self.marker_publisher.publish(markers)
 
@@ -278,18 +358,223 @@ def choose_priority(conflicts, priorities):
     return 'robot1', 'robot2'
 
 
-def wait_for_tasks(navigators, active_names, timeout, view, state, detail,
-                   released=False):
-    start = time.monotonic()
-    done = {name: False for name in active_names}
-    while rclpy.ok() and not all(done.values()):
-        for name in active_names:
-            done[name] = done[name] or navigators[name].isTaskComplete()
-        if time.monotonic() - start > timeout:
-            raise TimeoutError(f'{state} timed out')
-        view.publish(state, detail, released=released)
-        time.sleep(0.1)
-    return {name: navigators[name].getResult() for name in active_names}
+def update_runtime(robot, minimum_speed, maximum_speed):
+    """Spin one navigator and update measured pose, speed, and path progress."""
+    if robot.active:
+        complete = robot.navigator.isTaskComplete()
+        feedback = robot.navigator.getFeedback()
+        if feedback is not None:
+            point = feedback.current_pose.pose.position
+            now = robot.navigator.get_clock().now().nanoseconds / 1e9
+            if robot.last_stamp is not None and now > robot.last_stamp:
+                distance = math.hypot(
+                    point.x - robot.last_x, point.y - robot.last_y)
+                measured = distance / (now - robot.last_stamp)
+                measured = min(max(measured, 0.0), maximum_speed)
+                robot.speed = max(
+                    minimum_speed, 0.7 * robot.speed + 0.3 * measured)
+            robot.x = point.x
+            robot.y = point.y
+            robot.last_x = point.x
+            robot.last_y = point.y
+            robot.last_stamp = now
+            robot.progress = nearest_progress(
+                robot.samples, robot.x, robot.y, robot.progress)
+        if complete:
+            robot.active = False
+            robot.result = robot.navigator.getResult()
+            if robot.mode == 'goal':
+                if robot.result != TaskResult.SUCCEEDED:
+                    raise RuntimeError(
+                        f'{robot.name} navigation failed: '
+                        f'{result_name(robot.result)}')
+                robot.final_done = True
+                robot.progress = len(robot.samples) - 1
+            elif robot.result != TaskResult.SUCCEEDED:
+                raise RuntimeError(
+                    f'{robot.name} failed to reach online hold point: '
+                    f'{result_name(robot.result)}')
+
+
+def command_goal(robot):
+    start_navigation(robot.navigator, robot.goal)
+    robot.mode = 'goal'
+    robot.active = True
+
+
+def cancel_active_navigation(robot, timeout=5.0):
+    """Cancel and drain the old action result before replacing its goal."""
+    if not robot.active:
+        return
+    robot.navigator.cancelTask()
+    deadline = time.monotonic() + timeout
+    while rclpy.ok() and not robot.navigator.isTaskComplete():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f'timed out canceling {robot.name} {robot.mode} goal')
+        time.sleep(0.05)
+    robot.active = False
+    robot.result = None
+
+
+def command_hold(robot, hold_pose):
+    cancel_active_navigation(robot)
+    start_navigation(robot.navigator, hold_pose)
+    robot.mode = 'hold'
+    robot.active = True
+
+
+def stop_for_reservation(robot):
+    cancel_active_navigation(robot)
+    robot.mode = 'hold'
+    robot.active = False
+
+
+def online_predictions(robots, node, minimum_speed, maximum_speed):
+    timed = {
+        name: remaining_timed_samples(
+            robot, minimum_speed, maximum_speed)
+        for name, robot in robots.items()
+    }
+    predicted = {
+        name: stamp_remaining_path(robot.path, timed[name], node)
+        for name, robot in robots.items()
+    }
+    return timed, predicted
+
+
+def run_online_coordination(robots, view, parameters):
+    """Continuously reschedule two independently planned Nav2 trajectories."""
+    names = ('robot1', 'robot2')
+    priorities = {
+        name: int(parameters[f'{name}_priority']) for name in names
+    }
+    minimum_speed = float(parameters['minimum_prediction_speed'])
+    maximum_speed = float(parameters['maximum_prediction_speed'])
+    clearance = float(parameters['clearance'])
+    time_margin = float(parameters['time_margin'])
+    emergency_clearance = float(parameters['emergency_clearance'])
+    period = float(parameters['online_period'])
+    timeout = float(parameters['timeout'])
+
+    for robot in robots.values():
+        command_goal(robot)
+
+    reservation = None
+    last_released = None
+    release_visible_until = 0.0
+    started = time.monotonic()
+
+    while rclpy.ok() and not all(
+            robot.final_done for robot in robots.values()):
+        for robot in robots.values():
+            update_runtime(robot, minimum_speed, maximum_speed)
+        if time.monotonic() - started > timeout:
+            raise TimeoutError('online coordination timed out')
+
+        timed, predicted = online_predictions(
+            robots, view.node, minimum_speed, maximum_speed)
+        conflicts = []
+        if timed['robot1'] and timed['robot2']:
+            conflicts = find_conflicts(
+                timed['robot1'], timed['robot2'], clearance, time_margin)
+
+        separation = math.hypot(
+            robots['robot1'].x - robots['robot2'].x,
+            robots['robot1'].y - robots['robot2'].y)
+        if not conflicts and separation <= emergency_clearance:
+            conflicts = [Conflict(
+                robots['robot1'].progress, robots['robot2'].progress,
+                (robots['robot1'].x + robots['robot2'].x) / 2.0,
+                (robots['robot1'].y + robots['robot2'].y) / 2.0,
+                0.0, 0.0)]
+
+        if reservation is None and conflicts:
+            granted, yielding = choose_priority(conflicts, priorities)
+            conflict_indices = {
+                'robot1': [item.index1 for item in conflicts],
+                'robot2': [item.index2 for item in conflicts],
+            }
+            hold_index = index_before_distance(
+                robots[yielding].samples,
+                min(conflict_indices[yielding]),
+                float(parameters['hold_distance']))
+            release_index = index_after_distance(
+                robots[granted].samples,
+                max(conflict_indices[granted]),
+                float(parameters['release_distance']))
+            hold_pose = deepcopy(robots[yielding].path.poses[hold_index])
+            hold_ahead = hold_index > robots[yielding].progress + 2
+            if hold_ahead:
+                command_hold(robots[yielding], hold_pose)
+                hold_detail = '前往动态等待点'
+            else:
+                stop_for_reservation(robots[yielding])
+                hold_pose = make_pose(
+                    robots[yielding].navigator,
+                    robots[yielding].x, robots[yielding].y)
+                hold_detail = '立即停车等待'
+            reservation = {
+                'granted': granted,
+                'yielding': yielding,
+                'release_index': release_index,
+                'conflicts': conflicts,
+                'hold_pose': hold_pose,
+            }
+            view.set_plan(
+                predicted['robot1'], predicted['robot2'],
+                conflicts, hold_pose)
+            first_time = min(
+                max(item.time1, item.time2) for item in conflicts)
+            view.publish(
+                'ONLINE_CONFLICT_DETECTED',
+                f't={first_time:.1f}s 动态冲突；{granted} 通行，'
+                f'{yielding} {hold_detail}')
+
+        if reservation is not None:
+            granted = reservation['granted']
+            yielding = reservation['yielding']
+            granted_robot = robots[granted]
+            cleared = (
+                granted_robot.progress >= reservation['release_index'] or
+                granted_robot.final_done)
+            if cleared:
+                if not robots[yielding].final_done:
+                    cancel_active_navigation(robots[yielding])
+                    command_goal(robots[yielding])
+                last_released = reservation
+                release_visible_until = time.monotonic() + 3.0
+                reservation = None
+                view.publish(
+                    'ONLINE_RESERVATION_RELEASED',
+                    f'{granted} 已清空动态冲突区；放行 {yielding}',
+                    released=True)
+            else:
+                view.set_plan(
+                    predicted['robot1'], predicted['robot2'],
+                    reservation['conflicts'], reservation['hold_pose'])
+                view.publish(
+                    'ONLINE_YIELDING',
+                    f'{yielding} 让行；{granted} 正在穿越预约区')
+        elif not conflicts:
+            if (last_released is not None and
+                    time.monotonic() < release_visible_until):
+                view.set_plan(
+                    predicted['robot1'], predicted['robot2'],
+                    last_released['conflicts'], last_released['hold_pose'])
+                view.publish(
+                    'ONLINE_CLEAR', '冲突预约已释放，持续监测剩余轨迹',
+                    released=True)
+            else:
+                view.set_plan(
+                    predicted['robot1'], predicted['robot2'], [])
+                view.publish(
+                    'ONLINE_MONITORING',
+                    f'无动态冲突；车间距 {separation:.2f} m')
+
+        time.sleep(period)
+
+    return {name: robot.result for name, robot in robots.items()}
 
 
 def main(args=None):
@@ -302,11 +587,15 @@ def main(args=None):
     parameters = {
         'nominal_speed': 0.45,
         'clearance': 0.80,
-        # A deliberately generous window keeps the narrow-passage demo
-        # reproducible while the online ETA model is still being developed.
+        # A generous temporal window makes the narrow-passage demonstration
+        # reproducible despite controller and simulator timing jitter.
         'time_margin': 4.00,
         'hold_distance': 1.10,
         'release_distance': 0.90,
+        'online_period': 0.20,
+        'minimum_prediction_speed': 0.12,
+        'maximum_prediction_speed': 0.55,
+        'emergency_clearance': 0.65,
         'robot1_priority': 0,
         'robot2_priority': 0,
         'timeout': 240.0,
@@ -350,103 +639,21 @@ def main(args=None):
             name: timed_samples(paths[name], float(parameters['nominal_speed']))
             for name in ('robot1', 'robot2')
         }
-        predicted = {
-            name: stamp_predicted_path(paths[name], samples[name], robot1)
+        robots = {
+            name: RobotRuntime(
+                name=name,
+                navigator=navigators[name],
+                path=paths[name],
+                samples=samples[name],
+                goal=goals[name],
+                x=starts[name].pose.position.x,
+                y=starts[name].pose.position.y,
+                speed=float(parameters['nominal_speed']))
             for name in ('robot1', 'robot2')
         }
-        conflicts = find_conflicts(
-            samples['robot1'], samples['robot2'],
-            float(parameters['clearance']),
-            float(parameters['time_margin']))
-
-        if not conflicts:
-            view.set_plan(predicted['robot1'], predicted['robot2'], [])
-            view.publish('NO_CONFLICT', '两条预测轨迹可同时执行')
-            start_navigation(robot1, goals['robot1'])
-            start_navigation(robot2, goals['robot2'])
-            results = wait_for_tasks(
-                navigators, ('robot1', 'robot2'),
-                float(parameters['timeout']), view,
-                'BOTH_NAVIGATING', '未发现时空冲突')
-        else:
-            priorities = {
-                'robot1': int(parameters['robot1_priority']),
-                'robot2': int(parameters['robot2_priority']),
-            }
-            granted, yielding = choose_priority(conflicts, priorities)
-            conflict_indices = {
-                'robot1': [item.index1 for item in conflicts],
-                'robot2': [item.index2 for item in conflicts],
-            }
-            hold_index = index_before_distance(
-                samples[yielding], min(conflict_indices[yielding]),
-                float(parameters['hold_distance']))
-            release_index = index_after_distance(
-                samples[granted], max(conflict_indices[granted]),
-                float(parameters['release_distance']))
-            hold_point = deepcopy(paths[yielding].poses[hold_index])
-            view.set_plan(
-                predicted['robot1'], predicted['robot2'],
-                conflicts, hold_point)
-            first_time = min(max(item.time1, item.time2)
-                             for item in conflicts)
-            view.publish(
-                'CONFLICT_DETECTED',
-                f'预计 t={first_time:.1f}s 冲突；{granted} 通行，{yielding} 让行')
-
-            start_navigation(navigators[granted], goals[granted])
-            hold_needed = hold_index > 2
-            if hold_needed:
-                start_navigation(navigators[yielding], hold_point)
-
-            progress = 0
-            start = time.monotonic()
-            granted_done = False
-            while rclpy.ok():
-                granted_done = navigators[granted].isTaskComplete()
-                if hold_needed:
-                    navigators[yielding].isTaskComplete()
-                feedback = navigators[granted].getFeedback()
-                if feedback is not None:
-                    point = feedback.current_pose.pose.position
-                    progress = nearest_progress(
-                        samples[granted], point.x, point.y, progress)
-                cleared = progress >= release_index
-                succeeded = (granted_done and
-                             navigators[granted].getResult() ==
-                             TaskResult.SUCCEEDED)
-                if cleared or succeeded:
-                    break
-                if granted_done:
-                    raise RuntimeError(
-                        f'{granted} failed before clearing conflict')
-                if time.monotonic() - start > float(parameters['timeout']):
-                    raise TimeoutError(
-                        'granted robot did not clear conflict')
-                view.publish(
-                    'YIELDING',
-                    f'{yielding} 在预测等待点让行；{granted} 穿越冲突区')
-                time.sleep(0.1)
-
-            if hold_needed and not navigators[yielding].isTaskComplete():
-                navigators[yielding].cancelTask()
-            start_navigation(navigators[yielding], goals[yielding])
-            view.publish(
-                'RESERVATION_RELEASED',
-                f'{granted} 已越过最后冲突点；放行 {yielding}', released=True)
-
-            active = [yielding]
-            if not granted_done:
-                active.append(granted)
-            remaining = wait_for_tasks(
-                navigators, active, float(parameters['timeout']), view,
-                'COORDINATED_NAVIGATION',
-                f'{yielding} 继续执行，冲突预约已释放', released=True)
-            results = {
-                granted: (navigators[granted].getResult()
-                          if granted in active else TaskResult.SUCCEEDED)
-            }
-            results.update(remaining)
+        view.publish(
+            'ONLINE_MONITORING', '启动双车并持续重算剩余轨迹冲突')
+        results = run_online_coordination(robots, view, parameters)
 
         success = all(result == TaskResult.SUCCEEDED
                       for result in results.values())

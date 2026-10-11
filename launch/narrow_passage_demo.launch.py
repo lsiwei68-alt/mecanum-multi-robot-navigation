@@ -7,6 +7,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -19,11 +20,19 @@ def generate_launch_description():
     headless = LaunchConfiguration('headless')
     use_rviz = LaunchConfiguration('rviz')
     run_demo = LaunchConfiguration('run_demo')
+    clearance = LaunchConfiguration('clearance')
+    time_margin = LaunchConfiguration('time_margin')
+    robot1_priority = LaunchConfiguration('robot1_priority')
+    robot2_priority = LaunchConfiguration('robot2_priority')
 
     return LaunchDescription([
         DeclareLaunchArgument('headless', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('run_demo', default_value='true'),
+        DeclareLaunchArgument('clearance', default_value='0.80'),
+        DeclareLaunchArgument('time_margin', default_value='4.0'),
+        DeclareLaunchArgument('robot1_priority', default_value='0'),
+        DeclareLaunchArgument('robot2_priority', default_value='0'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(dual_nav),
             launch_arguments={
@@ -51,7 +60,17 @@ def generate_launch_description():
                 package='mecanum_multi_nav',
                 executable='trajectory_coordinator',
                 name='trajectory_coordinator',
-                parameters=[{'use_sim_time': True}], output='screen',
+                parameters=[{
+                    'use_sim_time': True,
+                    'clearance': ParameterValue(clearance, value_type=float),
+                    'time_margin': ParameterValue(
+                        time_margin, value_type=float),
+                    'robot1_priority': ParameterValue(
+                        robot1_priority, value_type=int),
+                    'robot2_priority': ParameterValue(
+                        robot2_priority, value_type=int),
+                }],
+                output='screen',
                 condition=IfCondition(run_demo),
             ),
         ]),
