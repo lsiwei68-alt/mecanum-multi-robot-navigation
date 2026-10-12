@@ -2,6 +2,8 @@
 
 ROS 2 Humble + Nav2 + Gazebo Fortress 双麦克纳姆轮机器人协同导航与在线冲突调度演示。
 
+> 想从源码理解整个系统？请按 [代码阅读指南](docs/CODE_READING_GUIDE.md) 建议的顺序阅读启动链、Nav2、TF、传感器与在线协调算法。
+
 <p align="center">
   <a href="docs/media/combined-demo.mp4">
     <img src="docs/media/combined-demo.gif" alt="Gazebo 与 RViz 中的双机器人协同导航演示" width="900">
