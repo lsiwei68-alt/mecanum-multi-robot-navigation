@@ -10,6 +10,14 @@ ROS 2 Humble + Nav2 + Gazebo Fortress 双麦克纳姆轮机器人协同导航与
 
 <p align="center"><em>Gazebo 与 RViz 联合演示。点击动画观看压缩 MP4。</em></p>
 
+<p align="center">
+  <a href="docs/media/real-robot-demo.mp4">
+    <img src="docs/media/real-robot-demo.gif" alt="全向移动机器人真机运行演示" width="720">
+  </a>
+</p>
+
+<p align="center"><em>全向移动机器人真机实验。点击动画观看完整 MP4。</em></p>
+
 两辆全向移动机器人分别运行独立的 Nav2 导航栈，共享同一张已知地图。中央协调器持续读取两条全局路径和机器人实际状态，滚动预测时空冲突，在窄通道中动态选择先行车辆、生成等待点，并在冲突解除后释放让行车辆。两车最终以相同朝向并排停靠在目标区域。
 
 ## 功能概览
