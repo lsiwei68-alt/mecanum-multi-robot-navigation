@@ -2,14 +2,19 @@
 <package format="3">
   <name>mecanum_multi_nav</name>
   <version>0.1.0</version>
-  <description>Two namespaced mecanum robots for Gazebo Fortress and Nav2.</description>
-  <maintainer email="wei@example.com">wei</maintainer>
+  <description>Two namespaced mecanum robots with Nav2 and online trajectory conflict coordination.</description>
+  <maintainer email="294501537+lsiwei68-alt@users.noreply.github.com">lsiwei68-alt</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_simple_commander</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
