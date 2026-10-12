@@ -716,33 +716,55 @@ def main(args=None):
     view = SchedulerView(robot1)
 
     parameters = {
-        'nominal_speed': 0.45,
+        # Match the conservative real-robot-like DWB / velocity-smoother
+        # limits instead of predicting with the former ideal-simulation speed.
+        'nominal_speed': 0.27,
         'clearance': 0.80,
         # A generous temporal window makes the narrow-passage demonstration
         # reproducible despite controller and simulator timing jitter.
         'time_margin': 4.00,
         'hold_distance': 1.10,
         'online_period': 0.20,
-        'minimum_prediction_speed': 0.12,
-        'maximum_prediction_speed': 0.55,
+        'minimum_prediction_speed': 0.08,
+        'maximum_prediction_speed': 0.32,
         'emergency_clearance': 0.65,
         'release_min_separation': 1.00,
         'release_confirmation_cycles': 5,
         'robot1_priority': 0,
         'robot2_priority': 0,
         'timeout': 240.0,
+        'robot1_start_x': -3.0,
+        'robot1_start_y': -2.0,
+        'robot1_start_yaw': 0.0,
+        'robot2_start_x': -3.0,
+        'robot2_start_y': 2.0,
+        'robot2_start_yaw': 0.0,
+        'robot1_goal_x': 3.0,
+        'robot1_goal_y': -0.6,
+        'robot1_goal_yaw': 0.0,
+        'robot2_goal_x': 3.0,
+        'robot2_goal_y': 0.6,
+        'robot2_goal_yaw': 0.0,
     }
     for name, value in parameters.items():
         robot1.declare_parameter(name, value)
         parameters[name] = robot1.get_parameter(name).value
 
     starts = {
-        'robot1': make_pose(robot1, -3.0, -2.0),
-        'robot2': make_pose(robot2, -3.0, 2.0),
+        'robot1': make_pose(
+            robot1, parameters['robot1_start_x'],
+            parameters['robot1_start_y'], parameters['robot1_start_yaw']),
+        'robot2': make_pose(
+            robot2, parameters['robot2_start_x'],
+            parameters['robot2_start_y'], parameters['robot2_start_yaw']),
     }
     goals = {
-        'robot1': make_pose(robot1, 3.0, -0.6),
-        'robot2': make_pose(robot2, 3.0, 0.6),
+        'robot1': make_pose(
+            robot1, parameters['robot1_goal_x'],
+            parameters['robot1_goal_y'], parameters['robot1_goal_yaw']),
+        'robot2': make_pose(
+            robot2, parameters['robot2_goal_x'],
+            parameters['robot2_goal_y'], parameters['robot2_goal_yaw']),
     }
     success = False
 

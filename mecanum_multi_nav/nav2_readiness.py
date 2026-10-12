@@ -5,7 +5,7 @@ import time
 import rclpy
 
 
-def wait_for_nav2(navigator, timeout=60.0):
+def wait_for_nav2(navigator, timeout=90.0):
     """Wait for localization and the namespaced Nav2 action interfaces.
 
     Lifecycle GetState and is_active service responses can occasionally be

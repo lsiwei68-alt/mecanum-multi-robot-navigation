@@ -30,15 +30,20 @@ def _render_robot(package_share, namespace, native_lidar=False):
     return path
 
 
-def _render_nav2_params(package_share, namespace, native_lidar=False):
+def _render_nav2_params(package_share, namespace, native_lidar=False,
+                        initial_x='-3.0', initial_y=None,
+                        initial_yaw='0.0', suffix_label=''):
     source = os.path.join(package_share, 'config', 'nav2_omni.yaml')
     with open(source, 'r', encoding='utf-8') as params:
         rendered = params.read().replace('__NS__', namespace)
-    initial_y = '-2.0' if namespace == 'robot1' else '2.0'
+    if initial_y is None:
+        initial_y = '-2.0' if namespace == 'robot1' else '2.0'
+    rendered = rendered.replace('__INITIAL_X__', initial_x)
     rendered = rendered.replace('__INITIAL_Y__', initial_y)
+    rendered = rendered.replace('__INITIAL_YAW__', initial_yaw)
     if native_lidar:
         rendered = rendered.replace('scan_topic: scan_static', 'scan_topic: scan')
-    suffix = '_native_lidar' if native_lidar else ''
+    suffix = ('_native_lidar' if native_lidar else '') + suffix_label
     path = os.path.join(
         tempfile.gettempdir(), f'nav2_omni_{namespace}{suffix}.yaml')
     with open(path, 'w', encoding='utf-8') as output:
@@ -141,6 +146,12 @@ def generate_launch_description():
     world_file = LaunchConfiguration('world')
     map_file = LaunchConfiguration('map')
     scenario = LaunchConfiguration('scenario')
+    robot1_x = LaunchConfiguration('robot1_x')
+    robot1_y = LaunchConfiguration('robot1_y')
+    robot1_yaw = LaunchConfiguration('robot1_yaw')
+    robot2_x = LaunchConfiguration('robot2_x')
+    robot2_y = LaunchConfiguration('robot2_y')
+    robot2_yaw = LaunchConfiguration('robot2_yaw')
     headless = LaunchConfiguration('headless')
     native_lidar = LaunchConfiguration('native_lidar')
     software_rendering = LaunchConfiguration('software_rendering')
@@ -233,32 +244,46 @@ def generate_launch_description():
     robot2_params = _render_nav2_params(package_share, 'robot2')
     robot1_native_params = _render_nav2_params(package_share, 'robot1', True)
     robot2_native_params = _render_nav2_params(package_share, 'robot2', True)
+    robot1_bottleneck_params = _render_nav2_params(
+        package_share, 'robot1', initial_x='-1.4', initial_y='-3.8',
+        initial_yaw='1.5708', suffix_label='_bottleneck')
+    robot2_bottleneck_params = _render_nav2_params(
+        package_share, 'robot2', initial_x='1.4', initial_y='-3.8',
+        initial_yaw='1.5708', suffix_label='_bottleneck')
+    robot1_bottleneck_native_params = _render_nav2_params(
+        package_share, 'robot1', True, initial_x='-1.4', initial_y='-3.8',
+        initial_yaw='1.5708', suffix_label='_bottleneck')
+    robot2_bottleneck_native_params = _render_nav2_params(
+        package_share, 'robot2', True, initial_x='1.4', initial_y='-3.8',
+        initial_yaw='1.5708', suffix_label='_bottleneck')
     spawn_robot1 = Node(
         package='ros_gz_sim', executable='create',
         arguments=['-world', 'arena', '-file', robot1_sdf, '-name', 'robot1',
-                   '-x', '-3.0', '-y', '-2.0', '-z', '0.02', '-Y', '0.0'],
+                   '-x', robot1_x, '-y', robot1_y, '-z', '0.02',
+                   '-Y', robot1_yaw],
         output='screen',
         condition=UnlessCondition(native_lidar),
     )
     spawn_robot2 = Node(
         package='ros_gz_sim', executable='create',
         arguments=['-world', 'arena', '-file', robot2_sdf, '-name', 'robot2',
-                   '-x', '-3.0', '-y', '2.0', '-z', '0.02', '-Y', '0.0'],
+                   '-x', robot2_x, '-y', robot2_y, '-z', '0.02',
+                   '-Y', robot2_yaw],
         output='screen',
         condition=UnlessCondition(native_lidar),
     )
     spawn_robot1_native = Node(
         package='ros_gz_sim', executable='create',
         arguments=['-world', 'arena', '-file', robot1_native_sdf,
-                   '-name', 'robot1', '-x', '-3.0', '-y', '-2.0',
-                   '-z', '0.02', '-Y', '0.0'],
+                   '-name', 'robot1', '-x', robot1_x, '-y', robot1_y,
+                   '-z', '0.02', '-Y', robot1_yaw],
         output='screen', condition=IfCondition(native_lidar),
     )
     spawn_robot2_native = Node(
         package='ros_gz_sim', executable='create',
         arguments=['-world', 'arena', '-file', robot2_native_sdf,
-                   '-name', 'robot2', '-x', '-3.0', '-y', '2.0',
-                   '-z', '0.02', '-Y', '0.0'],
+                   '-name', 'robot2', '-x', robot2_x, '-y', robot2_y,
+                   '-z', '0.02', '-Y', robot2_yaw],
         output='screen', condition=IfCondition(native_lidar),
     )
 
@@ -287,6 +312,12 @@ def generate_launch_description():
             'scenario', default_value='arena',
             description='Geometry set used by the deterministic lidar.',
         ),
+        DeclareLaunchArgument('robot1_x', default_value='-3.0'),
+        DeclareLaunchArgument('robot1_y', default_value='-2.0'),
+        DeclareLaunchArgument('robot1_yaw', default_value='0.0'),
+        DeclareLaunchArgument('robot2_x', default_value='-3.0'),
+        DeclareLaunchArgument('robot2_y', default_value='2.0'),
+        DeclareLaunchArgument('robot2_yaw', default_value='0.0'),
         gazebo_gui,
         gazebo_server,
         gazebo_gui_native_software,
@@ -331,23 +362,51 @@ def generate_launch_description():
             actions=[
                 _nav2_bringup(
                     bringup_dir, 'robot1', map_file, robot1_params,
-                    UnlessCondition(native_lidar)),
+                    IfCondition(PythonExpression([
+                        "'", native_lidar, "' == 'false' and '", scenario,
+                        "' != 'bottleneck_corridor'",
+                    ]))),
             ],
         ),
+        # Start the second Nav2 stack only after robot1 has had time to finish
+        # its lifecycle transitions.  Concurrent plugin loading can delay DDS
+        # action discovery on WSL even when both lifecycle managers succeed.
         TimerAction(
-            period=7.0,
+            period=10.0,
             actions=[
                 _nav2_bringup(
                     bringup_dir, 'robot2', map_file, robot2_params,
-                    UnlessCondition(native_lidar)),
+                    IfCondition(PythonExpression([
+                        "'", native_lidar, "' == 'false' and '", scenario,
+                        "' != 'bottleneck_corridor'",
+                    ]))),
             ],
         ),
+        TimerAction(period=5.0, actions=[
+            _nav2_bringup(
+                bringup_dir, 'robot1', map_file, robot1_bottleneck_params,
+                IfCondition(PythonExpression([
+                    "'", native_lidar, "' == 'false' and '", scenario,
+                    "' == 'bottleneck_corridor'",
+                ]))),
+        ]),
+        TimerAction(period=10.0, actions=[
+            _nav2_bringup(
+                bringup_dir, 'robot2', map_file, robot2_bottleneck_params,
+                IfCondition(PythonExpression([
+                    "'", native_lidar, "' == 'false' and '", scenario,
+                    "' == 'bottleneck_corridor'",
+                ]))),
+        ]),
         TimerAction(
             period=25.0,
             actions=[
                 _nav2_bringup(
                     bringup_dir, 'robot1', map_file, robot1_native_params,
-                    IfCondition(native_lidar)),
+                    IfCondition(PythonExpression([
+                        "'", native_lidar, "' == 'true' and '", scenario,
+                        "' != 'bottleneck_corridor'",
+                    ]))),
             ],
         ),
         TimerAction(
@@ -355,7 +414,28 @@ def generate_launch_description():
             actions=[
                 _nav2_bringup(
                     bringup_dir, 'robot2', map_file, robot2_native_params,
-                    IfCondition(native_lidar)),
+                    IfCondition(PythonExpression([
+                        "'", native_lidar, "' == 'true' and '", scenario,
+                        "' != 'bottleneck_corridor'",
+                    ]))),
             ],
         ),
+        TimerAction(period=25.0, actions=[
+            _nav2_bringup(
+                bringup_dir, 'robot1', map_file,
+                robot1_bottleneck_native_params,
+                IfCondition(PythonExpression([
+                    "'", native_lidar, "' == 'true' and '", scenario,
+                    "' == 'bottleneck_corridor'",
+                ]))),
+        ]),
+        TimerAction(period=27.0, actions=[
+            _nav2_bringup(
+                bringup_dir, 'robot2', map_file,
+                robot2_bottleneck_native_params,
+                IfCondition(PythonExpression([
+                    "'", native_lidar, "' == 'true' and '", scenario,
+                    "' == 'bottleneck_corridor'",
+                ]))),
+        ]),
     ])

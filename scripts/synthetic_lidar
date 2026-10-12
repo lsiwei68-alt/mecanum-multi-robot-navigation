@@ -28,6 +28,17 @@ NARROW_PASSAGE_BOXES = (
     (2.0, 2.6, 1.8, 3.2),
 )
 
+# Two open staging rooms joined by a 1.1 m-wide, 4.0 m-long corridor.
+# These boxes exactly match maps/bottleneck_corridor.svg and the SDF world.
+BOTTLENECK_CORRIDOR_BOXES = (
+    (-4.9, -0.55, -2.30, -2.00),
+    (0.55, 4.9, -2.30, -2.00),
+    (-0.85, -0.55, -2.00, 2.00),
+    (0.55, 0.85, -2.00, 2.00),
+    (-4.9, -0.55, 2.00, 2.30),
+    (0.55, 4.9, 2.00, 2.30),
+)
+
 
 def yaw_from_quaternion(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
@@ -80,9 +91,11 @@ class SyntheticLidar(Node):
         self.robot_name = self.get_parameter('robot_name').value
         self.other_robot = self.get_parameter('other_robot').value
         scenario = self.get_parameter('scenario').value
-        self.static_boxes = (NARROW_PASSAGE_BOXES
-                             if scenario == 'narrow_passage'
-                             else STATIC_BOXES)
+        scenario_boxes = {
+            'narrow_passage': NARROW_PASSAGE_BOXES,
+            'bottleneck_corridor': BOTTLENECK_CORRIDOR_BOXES,
+        }
+        self.static_boxes = scenario_boxes.get(scenario, STATIC_BOXES)
         self.own_pose = None
         self.own_stamp = None
         self.other_pose = None

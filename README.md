@@ -14,6 +14,9 @@ ROS 2 Humble + Gazebo Fortress 双麦克纳姆轮小车协同导航学习项目�
 - `/tf`、`/tf_static`：汇总后的显示树，供单个 RViz 同时观察两辆车
 - 全局规划：各自使用 NavFn，在同一张 `arena.yaml` 地图上规划
 - 局部规划：支持 `linear.y` 的 DWB 全向运动模型
+- 真机化速度约束：前进 `0.30 m/s`、横移 `0.18 m/s`、平面合速度
+  `0.30 m/s`，并使用较保守的加减速度；横移低于前进以近似麦克纳姆轮滚子
+  滑移和轮速饱和
 - 编队层：根据目标中心、朝向和间距生成两个终点槽位，并做最短距离分配
 - 相互感知：`scan` 同时包含静态环境和另一辆小车，供局部代价地图避障
 - 定位扫描：`scan_static` 只含静态环境，避免移动小车干扰 AMCL
@@ -171,6 +174,19 @@ ros2 topic echo --qos-durability transient_local /coordination/state
 调度器，并不是联合搜索两辆车全部状态的最优多智能体路径规划器。后续可继续加入
 优先级老化（避免长期饥饿）、全局路径变化检测、对向会车的候选避让点搜索，以及
 三辆以上车辆的预约队列。
+
+### 瓶颈走廊场景
+
+新增的 `bottleneck_corridor` 场景更接近实际入口：两辆车从下方开阔出发区并排
+出发，经净宽 `1.1 m`、长 `4.0 m` 的单车瓶颈走廊，到达上方开阔终点区后再次
+并排停放。走廊足够单车通过，但两车的安全包络不能并行，在线协调器必须动态
+分配通行权。旧的横向狭窄通道场景继续保留。
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/multi_robot_nav_ws/install/setup.bash
+ros2 launch mecanum_multi_nav bottleneck_corridor_demo.launch.py
+```
 
 默认目标中心为 `(3.0, 0.0)`，朝向为 `0 rad`，两车中心距为 `1.2 m`。可覆盖参数：
 
